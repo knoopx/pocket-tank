@@ -129,7 +129,6 @@ Tiers are build order. Tier 1 alone is a shippable feature.
 | `stage_up` | fry -> juv -> adult -> elder | |
 | `sleep`, `wake` | PWR key press to sleep / wake | DEFERRED by Strato 2026-09-15, no cue yet; wake would play after the codec is up, so ~100 ms into the boot |
 | `coin` | sand dollars earned (the "+N" toast, render_sd_toast) | not yet: no cue in the bank; the toast is silent. A purchase plays `confirm` |
-| `low_battery` | gauge falls to 10% | once per discharge, with the low-battery modal and the persistent pill (section 4a) |
 | `error` | save failed, reset prompt | |
 
 Not in scope: music, ambient loops, a per-decision sound (the LLM decides
@@ -150,23 +149,6 @@ the keeper visits, as now). Milestones earned during drowse or a save
 restore queue and show one at a time on the next awake frame, spaced ~1 s.
 Never over the setup or birth flow: queue behind them. Save semantics
 unchanged.
-
-**Low battery.** Today the battery pill (`render_battery`, top right) only
-appears with a fish's stats card. New:
-- When the gauge falls to **10%** and is not charging: `low_battery` plays
-  once and a modal says the tank needs charging (short text, the pill
-  drawn large). Tap dismisses; it times out after ~6 s. Once per discharge:
-  the flag clears when charging is seen or the gauge is back above the
-  hide threshold.
-- While low, the pill stays on screen at the top right on every frame,
-  over the tank, under any card or page. It leaves once the gauge reads
-  **above 10%** for 30 consecutive seconds, or immediately when charging
-  starts (the pill then shows the charging state until it clears).
-- The gauge is read once a second already (main.c); reuse that sample.
-  Caveat from the battery pass: the AXP2101 %-scale is not linear and sat
-  at 100% for the first half hour of a discharge, so 10% by the gauge is
-  the trigger, whatever that is in real mAh. If the batlog shows the pill
-  appearing with hours of life left, the threshold moves, not the design.
 
 ## 5. Firmware design
 
@@ -251,7 +233,6 @@ fold; "after HP" is what survives the speaker's 600 Hz floor.
 | sound-stage_up | stage_up | 2.75 s | -1.8 | -2.6 | good |
 | sound-milestone | milestone | 2.5 s | -2.9 | -6.7 | ok; loses 7 dB of body on the speaker |
 | sound-fry_arrival_v2 | arrival | 1.24 s | 0.0 | -4.5 | good (v2 13:38); the top end now carries it |
-| sound-low_battery_v2 | low_battery | 1.5 s | -1.2 | -8.8 | good (v2 13:40) |
 | sound-welcome_v2 | welcome | 2.0 s | -3.4 | -5.9 | good (v2 13:30): 22 dB more speaker-band level than v1, and now the 2 s of the spec. Stereo again (fold -2.6 dB), harmless since the tool normalizes after the fold |
 | sound-spook_dash_v2 | spook | 0.6 s | -0.3 | -1.0 | good (v2 13:46); the biggest turnaround of the batch, from inaudible to full level |
 | sound-beg | beg | 0.5 s | -28.2 | -31.6 | DEFERRED by Strato 2026-09-15 (on the fence about the cue itself); the tool skips it |

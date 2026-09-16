@@ -6,6 +6,3 @@ idf_component_register(
     REQUIRES esp_timer tankcore
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -O3 -ffast-math)
-if(CONFIG_POCKET_TANK_NO_PIE)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE POCKET_TANK_NO_PIE)
-endif()

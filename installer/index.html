@@ -5,23 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#f8f8f8">
 <title>Install Pocket Tank</title>
-<meta name="description" content="Flash Pocket Tank onto a Waveshare ESP32-S3-Touch-AMOLED-1.8 straight from your browser. No tools to install.">
-<link rel="canonical" href="https://stratobuilds.com/pocket-tank-installer/">
+<meta name="description" content="Flash Pocket Tank onto a Waveshare ESP32-P4-WIFI6-Touch-LCD-4B straight from your browser. No tools to install.">
+<link rel="canonical" href="https://knoopx.github.io/pocket-tank-p4/">
 <link rel="icon" href="https://stratobuilds.com/wp-content/uploads/2025/06/strato-builds-favicon-64.png" sizes="64x64">
 <link rel="apple-touch-icon" href="https://stratobuilds.com/wp-content/uploads/2025/06/strato-builds-favicon-64.png">
 <!-- social sharing: the featured image (1280x720) and the card text -->
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="StratoBuilds">
-<meta property="og:url" content="https://stratobuilds.com/pocket-tank-installer/">
+<meta property="og:site_name" content="Pocket Tank">
+<meta property="og:url" content="https://knoopx.github.io/pocket-tank-p4/">
 <meta property="og:title" content="Install Pocket Tank from your browser">
-<meta property="og:description" content="A tiny language model keeps a fish tank alive on an ESP32-S3. Plug the board in, click Install, done. No toolchain, no terminal.">
+<meta property="og:description" content="A tiny language model keeps a fish tank alive on an ESP32-P4. Plug the board in, click Install, done. No toolchain, no terminal.">
 <meta property="og:image" content="https://stratobuilds.com/wp-content/uploads/2026/09/pt-installer.jpg">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="720">
-<meta property="og:image:alt" content="Pocket Tank running on the Waveshare ESP32-S3 AMOLED board">
+<meta property="og:image:alt" content="Pocket Tank running on the Waveshare ESP32-P4 4B board">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Install Pocket Tank from your browser">
-<meta name="twitter:description" content="A tiny language model keeps a fish tank alive on an ESP32-S3. Plug the board in, click Install, done. No toolchain, no terminal.">
+<meta name="twitter:description" content="A tiny language model keeps a fish tank alive on an ESP32-P4. Plug the board in, click Install, done. No toolchain, no terminal.">
 <meta name="twitter:image" content="https://stratobuilds.com/wp-content/uploads/2026/09/pt-installer.jpg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -104,13 +104,13 @@
 <body>
 <main>
   <header class="card header">
-    <a href="https://stratobuilds.com/" aria-label="StratoBuilds"><img src="https://stratobuilds.com/wp-content/uploads/2025/06/strato-builds-logo-horizontal-400x89.png" alt="StratoBuilds" width="200" height="45"></a>
+    <a href="https://github.com/knoopx/pocket-tank-p4" aria-label="Pocket Tank on GitHub"><img src="https://stratobuilds.com/wp-content/uploads/2025/06/strato-builds-logo-horizontal-400x89.png" alt="StratoBuilds" width="200" height="45"></a>
     <span class="pill">Pocket Tank &middot; Installer</span>
   </header>
 
   <section class="card dark">
     <h1>Install Pocket Tank</h1>
-    <p class="lede">A tiny language model governs fish decisions on an ESP32-S3. Put it on your board from this page, and bring a tank you already keep up to date the same way.</p>
+    <p class="lede">A tiny language model governs fish decisions on an ESP32-P4. Put it on your board from this page, and bring a tank you already keep up to date the same way.</p>
   </section>
 
   <section class="card">
@@ -149,8 +149,8 @@
   <section class="card">
     <h2>Supported hardware</h2>
     <p><span class="pill">Supported</span></p>
-    <p><b>Waveshare ESP32-S3-Touch-AMOLED-1.8</b> (revision V1 and V2; the firmware tells them apart at boot). ESP32-S3 with 16 MB flash and 8 MB PSRAM, 1.8" 368&times;448 AMOLED, capacitive touch, IMU, RTC, battery charger. Around $35 with the screen and a battery.</p>
-    <p class="fine">The installer checks that the connected chip is an ESP32-S3. It can't tell which board the chip sits on, so on any other ESP32-S3 board it will flash fine and then show nothing: the display and touch drivers are for this panel. More boards later.</p>
+    <p><b>Waveshare ESP32-P4-WIFI6-Touch-LCD-4B</b>. ESP32-P4 with 16 MB flash and 32 MB PSRAM, a 4-inch 720&times;720 ST7703 panel, GT911 capacitive touch, Wi-Fi 6.</p>
+    <p class="fine">The installer checks that the connected chip is an ESP32-P4. It can't tell which board the chip sits on, so on any other ESP32-P4 board it will flash fine and then show nothing: the display and touch drivers are for this panel. More boards later.</p>
   </section>
 
   <section class="card">
@@ -171,7 +171,7 @@
     </details>
     <details>
       <summary>A backup of the tank before updating (optional, needs a terminal)</summary>
-      <p>The update keeps the tank on its own, but if you like a copy first: with <code>esptool</code> installed (<code>pip install esptool</code>) and the board awake, <code>esptool.py --chip esp32s3 read_flash 0x9000 0x6000 my-tank.bin</code> saves the whole save area to a file, and <code>esptool.py --chip esp32s3 write_flash 0x9000 my-tank.bin</code> puts it back.</p>
+      <p>The update keeps the tank on its own, but if you like a copy first: with <code>esptool</code> installed (<code>pip install esptool</code>) and the board awake, <code>esptool.py --chip esp32p4 read_flash 0x9000 0x6000 my-tank.bin</code> saves the whole save area to a file, and <code>esptool.py --chip esp32p4 write_flash 0x9000 my-tank.bin</code> puts it back.</p>
     </details>
     <details>
       <summary>Windows: the port shows but the install fails to connect</summary>
@@ -189,8 +189,8 @@
   </section>
 
   <footer class="card foot">
-    <div><span>&copy; 2026 StratoBuilds</span><span>Firmware <span data-version>{{VERSION}}</span></span><span>Built <span data-built>{{DATE}}</span></span></div>
-    <div><span><a href="https://github.com/mediacutlet/pocket-tank">Source on GitHub</a></span><span><a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a></span></div>
+    <div><span>&copy; 2026 Pocket Tank</span><span>Firmware <span data-version>{{VERSION}}</span></span><span>Built <span data-built>{{DATE}}</span></span></div>
+    <div><span><a href="https://github.com/knoopx/pocket-tank-p4">Source on GitHub</a></span><span><a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a></span></div>
   </footer>
 </main>
 <script>

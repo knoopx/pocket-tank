@@ -1143,27 +1143,6 @@ void render_tank(const tank_t *t, uint16_t *fb, int stride) {
 #undef DYN_RECT
 }
 
-/* device battery pill, top-right: outline + nub, fill fraction colored by
- * level (charging = teal). Same visual language as the stats card - no text. */
-void render_battery(uint16_t *fb, int stride, float frac, bool charging) {
-    ctx_t c = ctx_full(fb, stride, 1.0f);
-    if (frac < 0) frac = 0;
-    if (frac > 1) frac = 1;
-    const int W = 26, H = 11, X = TANK_W - W - 28, Y = 9;   /* clear of the curved bezel */
-    uint32_t col = charging ? 0x38dcc7 : frac < 0.2f ? 0xf25b65
-                 : frac < 0.45f ? 0xffbd59 : 0x78d67d;
-    for (int y = Y; y < Y + H; y++)
-        for (int x = X; x < X + W; x++)
-            px_blend(&c, x, y, 0x04141a, 215);
-    for (int x = X; x < X + W; x++) { px(&c, x, Y, rgb565(0x9fb4b8, 1)); px(&c, x, Y + H - 1, rgb565(0x9fb4b8, 1)); }
-    for (int y = Y; y < Y + H; y++) { px(&c, X, y, rgb565(0x9fb4b8, 1)); px(&c, X + W - 1, y, rgb565(0x9fb4b8, 1)); }
-    for (int y = Y + 3; y < Y + H - 3; y++)                    /* nub */
-        for (int x = X + W; x < X + W + 3; x++) px(&c, x, y, rgb565(0x9fb4b8, 1));
-    int fw = (int)((W - 4) * frac + 0.5f);
-    for (int y = Y + 2; y < Y + H - 2; y++)
-        for (int x = X + 2; x < X + 2 + fw; x++) px(&c, x, y, rgb565(col, 1));
-}
-
 /* ---- stats overlay (selection ring + visual card) ---- */
 
 static void ring(ctx_t *c, float cx, float cy, float r, uint32_t rgb) {
@@ -1970,15 +1949,7 @@ void render_notice(const tank_t *t, uint16_t *fb, int stride, int kind, int fish
     char title[FISH_NAME_MAX + 8] = "THE TANK", caption[40] = "";
     const icon_t *ic = NULL;
     const fish_t *f = fish >= 0 && fish < t->n_fish ? &t->fish[fish] : NULL;
-    if (kind == 3) {                                          /* NOTICE_LOW_BATTERY */
-        snprintf(title, sizeof title, "LOW BATTERY");
-        snprintf(caption, sizeof caption, "PLEASE CHARGE THE TANK");
-        /* the pill, large: outline + nub, the last sliver lit red */
-        const int PW = 60, PH = 28, PX = X + (W - PW) / 2, PY = Y + 34;
-        rect_edge(&c, PX, PY, PW, PH, 0x9fb4b8); rect_edge(&c, PX + 1, PY + 1, PW - 2, PH - 2, 0x9fb4b8);
-        rect_fill(&c, PX + PW, PY + 8, 5, PH - 16, 0x9fb4b8);
-        rect_fill(&c, PX + 4, PY + 4, 7, PH - 8, 0xf25b65);
-    } else if (kind == 2) {                                   /* NOTICE_STAGE */
+    if (kind == 2) {                                           /* NOTICE_STAGE */
         if (f) { snprintf(title, sizeof title, "%s", f->name);
                  snprintf(caption, sizeof caption, "IS NOW %s %s", f->stage == STAGE_ADULT || f->stage == STAGE_ELDER ? "AN" : "A", STAGE_WORDS[f->stage & 3]);
                  render_fish_preview(fb, stride, X + W / 2, Y + 48, f->size * 1.6f, f->color, f->fin, f->accent, t->clock); }

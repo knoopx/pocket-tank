@@ -12,7 +12,7 @@
  *                          S the first-run setup flow (welcome / names / colours),
  *                          R force an arrival (the birth flow opens: announce /
  *                          name / family; S drops it), A auto-light, Q quit,
- *                          V volume (off / quiet / normal), B the low-battery notice,
+ *                          V volume (off / quiet / normal),
  *                          4 ($) the shop page, D +50 sand dollars;
  *                          click fish = stats; tap the water surface = feed;
  *                          drag down from the top = feed; hold >= 3 s = finger
@@ -1347,15 +1347,13 @@ static int snapshot(const char *prefix, int seconds) {
     snprintf(path, sizeof path, "%s_milestone_modal.ppm", prefix); write_ppm(path, fb);
     render_milestones_leave();
     /* the announcements (notice.h): a fish milestone, a tank milestone, a
-       stage reached, low battery - each over the live tank */
+       stage reached - each over the live tank */
     render_tank(&tank, fb, TANK_W); render_notice(&tank, fb, TANK_W, 0, 1, MS_FIRST_BUBBLES, 0.6f);
     snprintf(path, sizeof path, "%s_notice_fish.ppm", prefix); write_ppm(path, fb);
     render_tank(&tank, fb, TANK_W); render_notice(&tank, fb, TANK_W, 1, -1, TMS_FIRST_TRIM, 0.6f);
     snprintf(path, sizeof path, "%s_notice_tank.ppm", prefix); write_ppm(path, fb);
     render_tank(&tank, fb, TANK_W); render_notice(&tank, fb, TANK_W, 2, 2, 0, 0.6f);
     snprintf(path, sizeof path, "%s_notice_stage.ppm", prefix); write_ppm(path, fb);
-    render_tank(&tank, fb, TANK_W); render_notice(&tank, fb, TANK_W, 3, -1, 0, 0.6f); render_battery(fb, TANK_W, 0.08f, false);
-    snprintf(path, sizeof path, "%s_notice_battery.ppm", prefix); write_ppm(path, fb);
     render_tank(&tank, fb, TANK_W); render_confirm_reset(fb, TANK_W, 0.7f);
     snprintf(path, sizeof path, "%s_confirm.ppm", prefix); write_ppm(path, fb);
     /* the first-run setup, page by page (never BEGIN: that would save this
@@ -1860,7 +1858,7 @@ static int selftest_hunger(void) {
        that fish, not the school's mean: the well-fed rest only ever met a
        pellet by wandering into one, which depended on how often the rule
        stub re-rolled their goals - and flipped when the idle re-ask ceiling
-       went 9 -> 25 s in the battery pass (a full fish not eating is right). */
+       went 9 -> 25 s in the 09-11 tuning pass (a full fish not eating is right). */
     tank.fish[0].hunger = 8.0f;
     float before = tank.fish[0].hunger; int eaten0 = tank.fish[0].eaten;
     tank_feed(&tank, 220, 3); tank_feed(&tank, 260, 3);
@@ -1991,7 +1989,7 @@ int main(int argc, char **argv) {
     lv_timer_create(frame_cb, 16, NULL);
 
     bool fdown = false, ndown = false, ldown = false;
-    bool udown = false, mdown = false, mkdown = false, rdown = false, zdown = false, gdown = false, xdown = false, sdown = false, vdown = false, bdown = false, fourdown = false, ddown = false;
+    bool udown = false, mdown = false, mkdown = false, rdown = false, zdown = false, gdown = false, xdown = false, sdown = false, vdown = false, fourdown = false, ddown = false;
     bool cdown = false;             /* C: the castle prototype */
     uint32_t press_ms = 0; int press_x = 0, press_y = 0;
     float press_fx[N_FISH_MAX] = {0}, press_fy[N_FISH_MAX] = {0};
@@ -2110,8 +2108,6 @@ int main(int argc, char **argv) {
         if (k[SDL_SCANCODE_V] && !vdown) { int v = (audio_volume() + 1) % 3; if (s_adev) { SDL_LockAudioDevice(s_adev); audio_set_volume(v); SDL_UnlockAudioDevice(s_adev); }
                                            printf("volume: %s\n", v == 0 ? "off" : v == 1 ? "quiet" : "normal"); }
         vdown = k[SDL_SCANCODE_V];
-        if (k[SDL_SCANCODE_B] && !bdown) { notice_low_battery(); printf("low battery notice queued\n"); }
-        bdown = k[SDL_SCANCODE_B];
         if (k[SDL_SCANCODE_4] && !fourdown && !confirm_view && !setup_up) {   /* $: the shop page */
             shop_view = !shop_view; if (!shop_view) render_shop_leave(); milestones_view = false; settings_view = false; selected_fish = -1;
             printf("shop: %s (%d sand dollars)\n", shop_view ? "up" : "closed", tank.sd_balance);

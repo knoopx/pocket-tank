@@ -1,25 +1,28 @@
-/* touch_port_ft3168.c — FT3168 capacitive touch (FT5x06 register family) ->
- * tank_touch_hold / tank_touch_tap, with the same gesture timing as the sim's
- * mouse: press+release < 350 ms with < 24 px displacement = tap (fingertips
- * roll and this panel is 322 ppi); held > 300 ms = hold; a drag down from
- * the top edge = feed at that x; every touched frame streams to
- * tank_touch_drag (a moving stroke wipes algae; a horizontal slash through
- * a canopy trims it). Fish taps hit-test 38 px against the press-time fish
- * snapshot AND the current position - fish move during a tap. While the stats
- * card is up, a tap anywhere on empty glass dismisses it (hunting the same
- * fish again to close it was the old, cumbersome way) and does nothing else.
- * Coordinates are mapped from the portrait panel to the landscape tank. */
+/* touch_port_gt911.c — GT911 capacitive touch on the Waveshare
+ * ESP32-P4-WIFI6-Touch-LCD-4B (720x720) -> tank_touch_hold / tank_touch_tap,
+ * with the same gesture timing as the sim's mouse: press+release < 350 ms
+ * with < 24 px displacement = tap (fingertips roll and this panel is 322 ppi);
+ * held > 300 ms = hold; a drag down from the top edge = feed at that x;
+ * every touched frame streams to tank_touch_drag (a moving stroke wipes
+ * algae; a horizontal slash through a canopy trims it). Fish taps hit-test
+ * 38 px against the press-time fish snapshot AND the current position - fish
+ * move during a tap. While the stats card is up, a tap anywhere on empty
+ * glass dismisses it (hunting the same fish again to close it was the old,
+ * cumbersome way) and does nothing else. Coordinates: the GT911 reports
+ * 720x720 screen coords and the tank scene is the FULL 720x720 square fit
+ * (the glass side, SCALED_W/SCALED_H/GLASS_Y_OFF, lives in display_port.h;
+ * the tank-side division is local) - no portrait rotation (the panel is square
+ * and the scene is already landscape). */
 #include "touch_port.h"
-#include "board_pins.h"
+#include "display_port.h"
 #include "tank.h"
 #include "render.h"
 #include "setup.h"
 #include "notice.h"
 #include "audio_port.h"
 #include "progression.h"
-#include "esp_lcd_touch_ft5x06.h"
-#include "esp_lcd_touch_cst816s.h"
-#include "esp_lcd_panel_io.h"
+#include "bsp/esp-bsp.h"
+#include "bsp/touch.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "driver/i2c_master.h"
@@ -40,7 +43,7 @@ static bool s_back;                               /* the settings page's CLOSE j
 static int  s_shop_act;                           /* an UNLOCK / MOVE tapped: the raw tap code, for main (one-shot) */
 static int  s_set_what, s_set_val;                /* a segment tapped: SET_TAP_* + value, for main */
 #define CONFIRM_TIMEOUT_US (20LL * 1000000)
-static bool s_inverted;                           /* screen 180-flipped: mirror into tank space */
+static bool s_inverted;                           /* stored only: the 4B has no IMU (it stays false) */
 /* Fingers land a little BELOW where the eye aims - the pad rolls onto the
  * glass under the fingertip (phones shift their hit targets down for the
  * same reason; Strato saw it on the swatch rows, 2026-09-13). Reported
@@ -51,22 +54,27 @@ void touch_port_set_bias(int px) { s_bias_y = px; }
 int  touch_port_bias(void) { return s_bias_y; }
 
 void touch_port_set_inverted(bool inverted) { s_inverted = inverted; }
-extern i2c_master_bus_handle_t board_i2c_bus(void);
-extern bool board_is_v2(void);
+
+/* 720x720 screen coord -> tank coord through the full-width scaled fit
+ * (glass side: SCALED_W/SCALED_H/GLASS_Y_OFF from display_port.h), clamped
+ * to the tank */
+static int screen_x(uint16_t sx) {
+    int tx = (int)sx * TANK_W / SCALED_W;   /* GLASS_X_OFF is 0 (full width) */
+    if (tx > TANK_W - 1) tx = TANK_W - 1;
+    return tx;
+}
+static int screen_y(uint16_t sy) {
+    int ty = ((int)sy - GLASS_Y_OFF) * TANK_H / SCALED_H;
+    if (ty < 0) ty = 0;
+    if (ty > TANK_H - 1) ty = TANK_H - 1;
+    return ty;
+}
 
 bool touch_port_init(void) {
-    esp_lcd_panel_io_handle_t io;
-    bool v2 = board_is_v2();
-    esp_lcd_panel_io_i2c_config_t io_cfg = v2 ? (esp_lcd_panel_io_i2c_config_t)ESP_LCD_TOUCH_IO_I2C_CST816S_CONFIG()
-                                              : (esp_lcd_panel_io_i2c_config_t)ESP_LCD_TOUCH_IO_I2C_FT5x06_CONFIG();
-    io_cfg.dev_addr = v2 ? I2C_ADDR_CST816 : I2C_ADDR_FT3168; io_cfg.scl_speed_hz = 400000;
-    if (esp_lcd_new_panel_io_i2c(board_i2c_bus(), &io_cfg, &io) != ESP_OK) { ESP_LOGW(TAG, "no touch io"); return false; }
-    esp_lcd_touch_config_t tp_cfg = { .x_max = PANEL_W, .y_max = PANEL_H, .rst_gpio_num = -1, .int_gpio_num = -1,
-        .levels = { .reset = 0, .interrupt = 0 }, .flags = { .swap_xy = 0, .mirror_x = 0, .mirror_y = 0 } };
-    esp_err_t err = v2 ? esp_lcd_touch_new_i2c_cst816s(io, &tp_cfg, &s_tp)
-                       : esp_lcd_touch_new_i2c_ft5x06(io, &tp_cfg, &s_tp);
-    if (err != ESP_OK) { ESP_LOGW(TAG, "no %s", v2 ? "CST816" : "FT3168"); return false; }
-    ESP_LOGI(TAG, "%s ready", v2 ? "CST816" : "FT3168");
+    if (bsp_i2c_init() != ESP_OK) { ESP_LOGW(TAG, "no BSP I2C bus"); return false; }
+    /* NULL = the BSP's default touch config (no swap / mirror) */
+    if (bsp_touch_new(NULL, &s_tp) != ESP_OK) { ESP_LOGW(TAG, "no GT911"); return false; }
+    ESP_LOGI(TAG, "GT911 ready (720x720 glass -> tank %dx%d full-width scale)", TANK_W, TANK_H);
     return true;
 }
 
@@ -78,10 +86,10 @@ void touch_port_poll(tank_t *t) {
     uint16_t x[1], y[1], st[1]; uint8_t n = 0;
     esp_lcd_touch_read_data(s_tp);
     bool touched = esp_lcd_touch_get_coordinates(s_tp, x, y, st, &n, 1) && n > 0;
-    /* portrait panel (px,py) -> landscape tank (tx,ty): tx = TANK_W-1-py, ty = px;
-     * flipped screen: mirror both, so downstream gestures live in displayed space */
-    float tx = touched ? (s_inverted ? (float)y[0] : (float)(TANK_W - 1 - y[0])) : s_lx;
-    float ty = touched ? (s_inverted ? (float)(TANK_H - 1 - x[0]) : (float)x[0]) - s_bias_y : s_ly;
+    /* screen (sx,sy) -> tank (tx,ty) through the full-width scaled fit; the
+     * finger-landing bias still shifts ty up (clamped at the glass) */
+    float tx = touched ? (float)screen_x(x[0]) : s_lx;
+    float ty = touched ? (float)screen_y(y[0]) - s_bias_y : s_ly;
     if (touched && ty < 0) ty = 0;
     if (touched && !s_down) {
         audio_port_prewarm();                   /* the release's cue plays warm */
@@ -150,9 +158,9 @@ void touch_port_poll(tank_t *t) {
                 progression_ack_milestones(t); render_milestones_leave();   /* everything shown is now "seen" */
                 goto released;
             }
-            if (s_sel >= 0 && s_sel != RENDER_CARD_SNAIL && RENDER_CARD_HIT(s_px, s_py)) {   /* a tap ON the card (or the slop
-                ESP_LOGI(TAG, "card tap at %.0f,%.0f -> milestones", s_px, s_py);         under its MORE button) = milestones page */
-                s_ms = true; goto released;
+            if (s_sel >= 0 && s_sel != RENDER_CARD_SNAIL && s_px >= RENDER_CARD_X && s_px < RENDER_CARD_X + RENDER_CARD_W &&
+                s_py >= RENDER_CARD_Y && s_py < RENDER_CARD_Y + RENDER_CARD_H) {
+                s_ms = true; goto released;                          /* a tap ON the card = milestones page */
             }
             /* fish first; only an empty tap reaches the water. 38 px radius
                (a fingertip on this 322 ppi panel covers ~60 px) against BOTH

@@ -28,7 +28,6 @@ static const policy_t POLICY[SND_COUNT] = {
     [SND_STAGE_UP]    = { 3, 1000 },
     [SND_SLEEP]       = { 3, 1000 },
     [SND_WAKE]        = { 3, 1000 },
-    [SND_LOW_BATTERY] = { 3, 5000 },
     [SND_ERROR]       = { 3, 1000 },
 };
 

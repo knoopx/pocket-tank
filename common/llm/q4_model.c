@@ -6,222 +6,16 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-/* On the ESP32-S3 the group dot product runs on the PIE 128-bit unit
- * (16 int8 MACs per ee.vmulas.s8.accx); everywhere else a scalar loop.
- * Both paths dot an UNPACKED int8 weight group against int8 activations —
- * the group is unpacked once and reused across every token of a batch.
- * Define POCKET_TANK_NO_PIE to force the scalar path (e.g. a QEMU build
- * without PIE emulation). Requires gs == 64 and 16-byte aligned buffers. */
-#ifdef ESP_PLATFORM
-#include "sdkconfig.h"
-#endif
-#if defined(CONFIG_IDF_TARGET_ESP32S3) && !defined(POCKET_TANK_NO_PIE)
-#define Q4_PIE 1
-static inline int32_t dot_i8_64(const int8_t *w, const int8_t *x) {
-    int32_t acc;
-    __asm__ volatile(
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q0, %[w], 16\n"
-        "ee.vld.128.ip q1, %[x], 16\n"
-        "ee.vld.128.ip q2, %[w], 16\n"
-        "ee.vld.128.ip q3, %[x], 16\n"
-        "ee.vmulas.s8.accx q0, q1\n"
-        "ee.vld.128.ip q0, %[w], 16\n"
-        "ee.vld.128.ip q1, %[x], 16\n"
-        "ee.vmulas.s8.accx q2, q3\n"
-        "ee.vld.128.ip q2, %[w], 16\n"
-        "ee.vld.128.ip q3, %[x], 16\n"
-        "ee.vmulas.s8.accx q0, q1\n"
-        "ee.vmulas.s8.accx q2, q3\n"
-        "rur.accx_0 %[acc]\n"
-        : [acc] "=r"(acc), [w] "+r"(w), [x] "+r"(x)
-        :
-        : "memory");
-    return acc;
-}
-/* four tokens against one weight group: the group loads into q0-q3 once and
- * stays there for all four activation rows (stride apart) */
-static inline void dot4_i8_64(const int8_t *w, const int8_t *x0, int stride, int32_t iv[4]) {
-    const int8_t *x1 = x0 + stride, *x2 = x1 + stride, *x3 = x2 + stride;
-    int32_t a0, a1, a2, a3;
-    __asm__ volatile(
-        "ee.vld.128.ip q0, %[w], 16\n"
-        "ee.vld.128.ip q1, %[w], 16\n"
-        "ee.vld.128.ip q2, %[w], 16\n"
-        "ee.vld.128.ip q3, %[w], 16\n"
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q4, %[x0], 16\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x0], 16, q0, q4\n"
-        "ee.vmulas.s8.accx.ld.ip q4, %[x0], 16, q1, q5\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x0], 16, q2, q4\n"
-        "ee.vmulas.s8.accx q3, q5\n"
-        "rur.accx_0 %[a0]\n"
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q4, %[x1], 16\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x1], 16, q0, q4\n"
-        "ee.vmulas.s8.accx.ld.ip q4, %[x1], 16, q1, q5\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x1], 16, q2, q4\n"
-        "ee.vmulas.s8.accx q3, q5\n"
-        "rur.accx_0 %[a1]\n"
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q4, %[x2], 16\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x2], 16, q0, q4\n"
-        "ee.vmulas.s8.accx.ld.ip q4, %[x2], 16, q1, q5\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x2], 16, q2, q4\n"
-        "ee.vmulas.s8.accx q3, q5\n"
-        "rur.accx_0 %[a2]\n"
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q4, %[x3], 16\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x3], 16, q0, q4\n"
-        "ee.vmulas.s8.accx.ld.ip q4, %[x3], 16, q1, q5\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x3], 16, q2, q4\n"
-        "ee.vmulas.s8.accx q3, q5\n"
-        "rur.accx_0 %[a3]\n"
-        : [a0] "=&r"(a0), [a1] "=&r"(a1), [a2] "=&r"(a2), [a3] "=r"(a3),
-          [w] "+r"(w), [x0] "+r"(x0), [x1] "+r"(x1), [x2] "+r"(x2), [x3] "+r"(x3)
-        :
-        : "memory");
-    iv[0] = a0; iv[1] = a1; iv[2] = a2; iv[3] = a3;
-}
-
-/* eight tokens per weight-group load: the four activation pointers each hop
- * (4*stride - 64) after their first pass to cover tokens t+4..t+7 */
-static inline void dot8_i8_64(const int8_t *w, const int8_t *x0, int stride, int32_t iv[8]) {
-    const int8_t *x1 = x0 + stride, *x2 = x1 + stride, *x3 = x2 + stride;
-    int hop = 4 * stride - 64;
-    int32_t a0, a1, a2, a3, b0, b1, b2, b3;
-    __asm__ volatile(
-        "ee.vld.128.ip q0, %[w], 16\n"
-        "ee.vld.128.ip q1, %[w], 16\n"
-        "ee.vld.128.ip q2, %[w], 16\n"
-        "ee.vld.128.ip q3, %[w], 16\n"
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q4, %[x0], 16\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x0], 16, q0, q4\n"
-        "ee.vmulas.s8.accx.ld.ip q4, %[x0], 16, q1, q5\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x0], 16, q2, q4\n"
-        "ee.vmulas.s8.accx q3, q5\n"
-        "rur.accx_0 %[a0]\n"
-        "add %[x0], %[x0], %[hop]\n"
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q4, %[x1], 16\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x1], 16, q0, q4\n"
-        "ee.vmulas.s8.accx.ld.ip q4, %[x1], 16, q1, q5\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x1], 16, q2, q4\n"
-        "ee.vmulas.s8.accx q3, q5\n"
-        "rur.accx_0 %[a1]\n"
-        "add %[x1], %[x1], %[hop]\n"
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q4, %[x2], 16\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x2], 16, q0, q4\n"
-        "ee.vmulas.s8.accx.ld.ip q4, %[x2], 16, q1, q5\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x2], 16, q2, q4\n"
-        "ee.vmulas.s8.accx q3, q5\n"
-        "rur.accx_0 %[a2]\n"
-        "add %[x2], %[x2], %[hop]\n"
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q4, %[x3], 16\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x3], 16, q0, q4\n"
-        "ee.vmulas.s8.accx.ld.ip q4, %[x3], 16, q1, q5\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x3], 16, q2, q4\n"
-        "ee.vmulas.s8.accx q3, q5\n"
-        "rur.accx_0 %[a3]\n"
-        "add %[x3], %[x3], %[hop]\n"
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q4, %[x0], 16\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x0], 16, q0, q4\n"
-        "ee.vmulas.s8.accx.ld.ip q4, %[x0], 16, q1, q5\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x0], 16, q2, q4\n"
-        "ee.vmulas.s8.accx q3, q5\n"
-        "rur.accx_0 %[b0]\n"
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q4, %[x1], 16\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x1], 16, q0, q4\n"
-        "ee.vmulas.s8.accx.ld.ip q4, %[x1], 16, q1, q5\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x1], 16, q2, q4\n"
-        "ee.vmulas.s8.accx q3, q5\n"
-        "rur.accx_0 %[b1]\n"
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q4, %[x2], 16\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x2], 16, q0, q4\n"
-        "ee.vmulas.s8.accx.ld.ip q4, %[x2], 16, q1, q5\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x2], 16, q2, q4\n"
-        "ee.vmulas.s8.accx q3, q5\n"
-        "rur.accx_0 %[b2]\n"
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q4, %[x3], 16\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x3], 16, q0, q4\n"
-        "ee.vmulas.s8.accx.ld.ip q4, %[x3], 16, q1, q5\n"
-        "ee.vmulas.s8.accx.ld.ip q5, %[x3], 16, q2, q4\n"
-        "ee.vmulas.s8.accx q3, q5\n"
-        "rur.accx_0 %[b3]\n"
-        : [a0] "=&r"(a0), [a1] "=&r"(a1), [a2] "=&r"(a2), [a3] "=&r"(a3),
-          [b0] "=&r"(b0), [b1] "=&r"(b1), [b2] "=&r"(b2), [b3] "=r"(b3),
-          [w] "+r"(w), [x0] "+r"(x0), [x1] "+r"(x1), [x2] "+r"(x2), [x3] "+r"(x3)
-        : [hop] "r"(hop)
-        : "memory");
-    iv[0] = a0; iv[1] = a1; iv[2] = a2; iv[3] = a3;
-    iv[4] = b0; iv[5] = b1; iv[6] = b2; iv[7] = b3;
-}
-
-/* single token, PACKED weights: unpack the group's nibbles vectorially
- * (mask for lows = evens block, 32-bit-lane shift + mask for highs = odds
- * block, matching the split activation layout) and dot in one pass. */
-static const int8_t q4pk_mask[16] __attribute__((aligned(16))) =
-    { 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15 };
-static const int8_t q4pk_eight[16] __attribute__((aligned(16))) =
-    { 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8 };
-static inline int32_t dot_q4pk_64(const uint8_t *wp, const int8_t *x) {
-    int32_t acc;
-    const int8_t *mask = q4pk_mask, *eight = q4pk_eight;
-    /* weight tensors in the model file are only 8-byte aligned (the embedding
-       scale block is 648 bytes), so the 32 packed bytes are fetched with
-       aligned loads + a SAR_BYTE funnel shift. The 16-byte overread stays
-       inside the 8 MB mapped model partition. */
-    const uint8_t *wa = (const uint8_t *)((uintptr_t)wp & ~(uintptr_t)15);
-    uint32_t shift = (uint32_t)((uintptr_t)wp & 15);
-    __asm__ volatile(
-        "ssai 4\n"
-        "wur.sar_byte %[sh]\n"
-        "ee.vld.128.ip q6, %[mask], 0\n"
-        "ee.vld.128.ip q7, %[eight], 0\n"
-        "ee.vld.128.ip q0, %[w], 16\n"
-        "ee.vld.128.ip q1, %[w], 16\n"
-        "ee.vld.128.ip q2, %[w], 0\n"
-        "ee.src.q q0, q0, q1\n"
-        "ee.src.q q1, q1, q2\n"
-        "ee.andq q2, q0, q6\n"
-        "ee.andq q3, q1, q6\n"
-        "ee.vsubs.s8 q2, q2, q7\n"
-        "ee.vsubs.s8 q3, q3, q7\n"
-        "ee.vsr.32 q4, q0\n"
-        "ee.vsr.32 q5, q1\n"
-        "ee.andq q4, q4, q6\n"
-        "ee.andq q5, q5, q6\n"
-        "ee.vsubs.s8 q4, q4, q7\n"
-        "ee.vsubs.s8 q5, q5, q7\n"
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q0, %[x], 16\n"
-        "ee.vmulas.s8.accx.ld.ip q1, %[x], 16, q2, q0\n"
-        "ee.vmulas.s8.accx.ld.ip q0, %[x], 16, q3, q1\n"
-        "ee.vmulas.s8.accx.ld.ip q1, %[x], 16, q4, q0\n"
-        "ee.vmulas.s8.accx q5, q1\n"
-        "rur.accx_0 %[acc]\n"
-        : [acc] "=r"(acc), [w] "+r"(wa), [x] "+r"(x), [mask] "+r"(mask), [eight] "+r"(eight)
-        : [sh] "r"(shift)
-        : "memory");
-    return acc;
-}
-#define Q4_PK 1
-#else
-#define Q4_PK 0
-#define Q4_PIE 0
+/* The P4 is RISC-V with no PIE SIMD unit: every group dot product runs the
+ * scalar loop below. Both activations and the UNPACKED int8 weight group are
+ * dotted per 64-element group — the group is unpacked once and reused across
+ * every token of a batch. Requires gs == 64 and 16-byte aligned buffers. */
 static inline int32_t dot_i8_64(const int8_t *w, const int8_t *x) {
     int32_t acc = 0;
     for (int k = 0; k < 64; k++) acc += (int32_t)w[k] * x[k];
     return acc;
 }
-#endif
+
 
 int64_t (*q4_clock_us)(void) = NULL;
 int64_t q4_prof_us[6];
@@ -288,7 +82,7 @@ static inline float half_to_float(uint16_t h) {
 
 void *(*q4_fast_alloc)(size_t) = NULL;
 
-/* run-state buffers must be 16-byte aligned for the PIE loads (allocations
+/* run-state buffers must be 16-byte aligned for the scalar kernels' loads (allocations
  * are permanent, so the rounded-up base pointer is simply dropped) */
 static void *alloc16(q4_model_t *m, size_t n) {
     uint8_t *p = m->alloc(n + 15);
@@ -321,18 +115,6 @@ static bool dot_selfcheck(void) {
         want += (int32_t)a[i] * b[i];
     }
     if (dot_i8_64(a, b) != want) return false;
-#if Q4_PK
-    /* packed-nibble kernel vs unpack_group + dot — at every alignment phase
-       the model file can produce (tensors are only 8-byte aligned) */
-    uint8_t pkbuf[64] __attribute__((aligned(16)));
-    int8_t wg[64] __attribute__((aligned(16)));
-    for (int off = 0; off <= 15; off += 8) {
-        uint8_t *pk = pkbuf + off;
-        for (int j = 0; j < 32; j++) pk[j] = (uint8_t)(j * 41 + 17 + off);
-        unpack_group(wg, pk, 64);
-        if (dot_q4pk_64(pk, b) != dot_i8_64(wg, b)) return false;
-    }
-#endif
     return true;
 }
 
@@ -421,23 +203,16 @@ static void quantize(qact_t *qx, const float *x, int n, int gs) {
     }
 }
 /* xout[d] = W[d,n] @ x[n]; the hot loop — int8 activations x 4-bit weights.
- * Each weight group is unpacked once and dotted on the PIE unit (scalar
- * elsewhere). gs must be 64 (asserted at open). */
+ * Each weight group is unpacked once and dotted scalar. gs must be 64
+ * (asserted at open). */
 static void matmul(float *xout, const qact_t *x, const q4w_t *w, int n, int d, int gs) {
-#if !Q4_PK
     int8_t wg[64] __attribute__((aligned(16)));
-#endif
     for (int i = 0; i < d; i++) {
         float val = 0; int in = i * n;
         for (int j = 0; j <= n - gs; j += gs) {
-#if Q4_PK
-            val += (float)dot_q4pk_64(w->q + ((in + j) >> 1), x->q + j)
-                   * half_to_float(w->s[(in + j) / gs]) * x->s[j / gs];
-#else
             unpack_group(wg, w->q + ((in + j) >> 1), gs);
             val += (float)dot_i8_64(wg, x->q + j)
                    * half_to_float(w->s[(in + j) / gs]) * x->s[j / gs];
-#endif
         }
         xout[i] = val;
     }
@@ -534,22 +309,7 @@ static void matmul_batch(float *out, const int8_t *xq, const float *xs, int n_to
                 unpack_group(wg, w->q + ((in + g * gs) >> 1), gs);
                 float ws = half_to_float(w->s[(in + g * gs) / gs]);
                 const int8_t *x = xq + g * gs;
-                int t = 0;
-#if Q4_PIE
-                for (; t + 8 <= n_tok; t += 8, x += 8 * n) {
-                    int32_t iv[8];
-                    dot8_i8_64(wg, x, n, iv);
-                    for (int k = 0; k < 8; k++)
-                        acc[t + k] += (float)iv[k] * ws * xs[(t + k) * sg + g];
-                }
-                for (; t + 4 <= n_tok; t += 4, x += 4 * n) {
-                    int32_t iv[4];
-                    dot4_i8_64(wg, x, n, iv);
-                    for (int k = 0; k < 4; k++)
-                        acc[t + k] += (float)iv[k] * ws * xs[(t + k) * sg + g];
-                }
-#endif
-                for (; t < n_tok; t++, x += n)
+                for (int t = 0; t < n_tok; t++, x += n)
                     acc[t] += (float)dot_i8_64(wg, x) * ws * xs[t * sg + g];
             }
             for (int t = 0; t < n_tok; t++) tile[t * Q4_TILE_D + ii] = acc[t];

@@ -72,11 +72,8 @@ void render_stats_card(const tank_t *t, int fish_idx, uint16_t *fb, int stride);
                                (y) >= RENDER_CARD_Y && (y) < RENDER_CARD_Y + RENDER_CARD_H + RENDER_CARD_HIT_BELOW)
 void render_set_card_cache(uint16_t *buf);
 
-/* Device battery pill (top-right), drawn with the stats card on hardware:
- * frac 0..1, charging tints the fill teal. */
-void render_battery(uint16_t *fb, int stride, float frac, bool charging);
 /* an announcement over the live tank (notice.h: a milestone the moment it
- * is earned, a stage reached, low battery), in the milestones page's modal
+ * is earned, a stage reached), in the milestones page's modal
  * style; frac_left (1 -> 0) is its remaining time, drawn as a thin bar */
 void render_notice(const tank_t *t, uint16_t *fb, int stride, int kind, int fish, uint32_t bit, float frac_left);
 

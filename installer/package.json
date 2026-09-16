@@ -1,0 +1,8 @@
+{
+  "name": "pocket-tank-installer",
+  "private": true,
+  "description": "Build deps for the Pocket Tank browser installer: the ESP Web Tools bundle (pinned exactly - the never_erase dialog patch depends on the 10.4.0 handler text)",
+  "dependencies": {
+    "esp-web-tools": "10.4.0"
+  }
+}

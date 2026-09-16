@@ -1,14 +1,15 @@
 # pocket-tank 🐟
 
 **A tiny language model keeps a fish tank alive on an $8 chip.**
-The ESP32-S3 board, with screen and battery used in this project is actually around $35.
+This is a fork for the Waveshare **ESP32-P4-WIFI6-Touch-LCD-4B** - the
+4-inch 720×720 ST7703 panel board (ESP32-P4, 16 MB flash, 32 MB PSRAM).
 
 A 14-million-parameter transformer, distilled from a 26-billion-parameter
-teacher, runs entirely on an ESP32-S3 microcontroller and makes every
+teacher, runs entirely on an ESP32-P4 microcontroller and makes every
 high-level decision for a small aquarium of virtual fish: when to eat, hide,
 explore, socialize, rest, or flee. No network. No cloud. The whole brain is a
-7.56 MB file read straight from flash, and the tank lives on a 1.8-inch AMOLED
-you can hold in one hand.
+7.56 MB file read straight from flash, and the tank lives on a 4-inch 720×720
+panel you can hold in one hand.
 
 ![The tank, running in the PC simulator](docs/media/sim-tank.png)
 
@@ -26,7 +27,7 @@ wall clear last explore time day  ->  seek_food urgency 8
 
 This repo is the complete project: the trained model, the distillation
 pipeline that made it, a PC simulator, and the firmware for a real board.
-Got the board? **[Install it from your browser](https://stratobuilds.com/pocket-tank-installer/)**,
+Got the board? **[Install it from your browser](https://knoopx.github.io/pocket-tank-p4/)**,
 no toolchain needed.
 
 ## Contents
@@ -52,7 +53,7 @@ no toolchain needed.
 | Parameters | ~26,000,000,000 | 14,300,000, about 1,818× fewer |
 | Size | ~18 GB (Q4_K_M) | 57 MB fp32 → **7.56 MB 4-bit** |
 | Vocabulary | ~262K tokens | **54 tokens** (a closed schema lexicon) |
-| Runs on | A desktop GPU | ESP32-S3, from flash, no network |
+| Runs on | A desktop GPU | ESP32-P4, from flash, no network |
 | Agreement | | 72% picks the teacher's goal (the teacher agrees with *itself* 82%) |
 
 On the real board a decision takes about 3.7 s at 12 tokens per second, with
@@ -71,9 +72,10 @@ into both the simulator and the firmware:
 - **LLM advisor** (`llm/`). A llama2.c-style 4-bit inference engine, a
   word-level tokenizer, and one shared state encoder. Fish are re-asked only
   when their situation meaningfully changes, so four to six fish share one
-  brain without anyone starving for a turn. The model runs on the second core
-  of the ESP32-S3 with SIMD dot products and quantized activations in
-  internal SRAM; the weights are memory-mapped from flash and never copied.
+  brain without anyone starving for a turn. The model runs on a core of the
+  ESP32-P4 with quantized activations in internal SRAM (the P4 is RISC-V with
+  no PIE SIMD, so the dot products are scalar); the weights are
+  memory-mapped from flash and never copied.
 - **Progression** (`progression.c`). The long game: growth, arrivals, trait
   drift, milestones, habits, persistence. Everything survives a power cut.
 
@@ -258,21 +260,18 @@ the desk is asleep until you pick it up. Six hours of device sleep in one
 stretch earns the tank its first full night's sleep.
 
 **Habits and continuity.** The tank remembers where you feed it and greets
-the light coming on. A real-time clock tells it how long it was off, so a
-tank left dark for a day wakes hungry. One key does all of it: a short
-press on PWR puts the tank to sleep - it saves and the screen goes dark -
-and a press wakes it. Press again within twenty minutes and the tank
-simply resumes where it was, on a tap; after that it powers itself down to
-the board's deepest state (tens of microamps, months on the shelf), and the
-next press wakes it with a one-second boot, the fish having lived through
-the time away: hunger up, energy back, the grass and the algae grown, a
-long night ending in begging at the surface. One thing to know about that
-deepest sleep: the only chip still awake is the power-management chip, and
-its rule is that the key must be held for about an eighth of a second
-before it turns the board on - a quick tap does nothing. Press it like you
-mean it. The tank decides how deep it sleeps; you never do. Holding PWR
-powers it off at once. Hold BOOT and tap the glass to reset the tank. Flip
-the device and the screen follows.
+the light coming on. The chip clock tells it how long it was off, so a tank
+left dark for a day wakes hungry. One key does all of it: a short press on
+BOOT puts the tank to sleep - it saves and the screen goes dark - and a
+press wakes it. Press again within a minute and a half and the tank simply
+resumes where it was; after that it drops into deep sleep, the fish having
+lived through the time away: hunger up, energy back, the grass and the
+algae grown, a long night ending in begging at the surface. The tank
+decides how deep it sleeps; you never do. The 4B is USB-C powered and has no battery, no PMIC, and no power-off -
+so deep sleep is the deepest state and the chip clock does not keep the
+wall time across it. Hold BOOT and tap the
+glass to reset the tank. The 4B has no IMU, so the screen is never
+auto-flipped.
 
 **First run.** A new tank, whether a fresh install or a reset, opens with a
 short setup over the live water. A welcome page; then you place the bubble
@@ -316,8 +315,8 @@ window, with the shipped model as the brain. Needs SDL2 and LVGL v9 (cloned
 in-tree):
 
 ```bash
-git clone https://github.com/mediacutlet/pocket-tank.git
-cd pocket-tank
+git clone https://github.com/knoopx/pocket-tank-p4.git
+cd pocket-tank-p4
 git clone --depth 1 --branch v9.2.2 https://github.com/lvgl/lvgl.git sim/lvgl
 brew install sdl2        # macOS; apt install libsdl2-dev on Linux
 cd sim && make && ./fishsim
@@ -339,8 +338,7 @@ between the rule stub and the LLM brain, **U** overlays, **M** milestones,
 **4** the shop, **D** fifty sand dollars to try it,
 **X** the reset prompt, **S** the first-run setup (or drops a birth's pages), **R** force an arrival
 (the birth flow opens), **Z** jump through seven
-hours of sleep, **G** grow the grass and algae now, **V** volume, **B** the
-low-battery notice, **Q** quit.
+hours of sleep, **G** grow the grass and algae now, **V** volume, **Q** quit.
 
 Flags: `--fresh` starts a new random tank, `--fast N` runs tended time N×
 faster so you can watch fish grow up, `--greedy` disables sampling,
@@ -358,22 +356,21 @@ dollars, the shop, the plant, the snail), and `--bench` (render cost).
 
 ## Try it: firmware in QEMU
 
-The ESP-IDF v5.4 app boots in Espressif's QEMU with the real hardware
-configuration (octal 8 MB PSRAM) and the model partition populated:
-
-```bash
-cd firmware && ./run_qemu.sh
-```
-
-You'll watch an emulated ESP32-S3 memory-map the 7.56 MB model from flash
-and start making decisions, about 2.3 s each in emulation. The display and
-touch ports are stubs in the QEMU overlay; decisions go to the log.
+The upstream project booted the app in Espressif's QEMU (the `esp32s3`
+machine, octal 8 MB PSRAM emulated). That S3 harness is not in this P4
+fork: the firmware here is built for the Waveshare 4B and runs on the
+board, not the emulator.
 
 ## Install from your browser
 
-The easy way onto a board: **https://stratobuilds.com/pocket-tank-installer/**.
-Plug the Waveshare board into your computer, open the page in Chrome or Edge,
-click *Install Pocket Tank*, pick the port, and watch the bar fill. About
+The easy way onto a board: **https://knoopx.github.io/pocket-tank-p4/**.
+It autodeploys: `.github/workflows/installer.yml` rebuilds the firmware, runs
+`tools/make_installer.py` and pushes the assembled folder to the repo's
+`gh-pages` branch on every push that touches `firmware/`, `common/`,
+`model/out/` or `installer/` - so the page always offers the firmware of the
+latest build. Plug the Waveshare board into your computer, open the page in
+Chrome or Edge, click *Install Pocket Tank*, pick the port, and watch the bar
+fill. About
 8 MB goes over in a minute or two, the board reboots on its own, and two fry
 are waiting.
 
@@ -393,26 +390,27 @@ running entirely in the browser over Web Serial.
 To host your own copy, `tools/make_installer.py` turns a firmware build plus
 the shipped model into one static folder (`installer/dist/`: the page, a
 manifest with the four parts and their flash offsets, the binaries, and the
-vendored flasher). Any HTTPS static host will do, GitHub Pages included;
-[installer/README.md](installer/README.md) has the details.
+flasher bundle, bun-installed from the pinned `esp-web-tools` package in
+`installer/package.json`). Any HTTPS static host will do, GitHub Pages
+included; [installer/README.md](installer/README.md) has the details.
 
 ## Run it on real hardware
 
-The target is the Waveshare **ESP32-S3-Touch-AMOLED-1.8** (ESP32-S3R8,
-16 MB flash, 8 MB PSRAM, 368×448 AMOLED, capacitive touch, IMU, PMIC, RTC).
-Both board revisions are supported and auto-detected. Touch targets sit
-10 px below where they are drawn, because fingers land a little low on a
-glass this small; the touch port corrects for it. The browser installer
+The target is the Waveshare **ESP32-P4-WIFI6-Touch-LCD-4B** (ESP32-P4,
+16 MB flash, 32 MB hex PSRAM, a 4-inch 720×720 ST7703 MIPI-DSI panel, GT911
+capacitive touch, ES8311 audio, USB-C powered). The tank renders 448×368
+landscape and is scaled to fill the square glass. The browser installer
 above is the no-toolchain path; this is the developer one.
 
 ```bash
 . ~/esp/esp-idf/export.sh
 cd firmware && idf.py build
 idf.py -p /dev/cu.usbmodem* flash
-esptool.py --chip esp32s3 -p /dev/cu.usbmodem* write_flash 0x290000 ../model/out/model_q4.bin
+esptool.py --chip esp32p4 -p /dev/cu.usbmodem* write_flash 0x410000 ../model/out/model_q4.bin
 ```
 
-The model lives in its own 8 MB raw partition and only needs flashing once.
+The model lives in its own 8 MB raw partition (offset 0x410000) and only
+needs flashing once.
 [docs/bringup.md](docs/bringup.md) is the step-by-step checklist with pass
 signals for each stage, and [docs/memory_budget.md](docs/memory_budget.md)
 explains where every kilobyte goes. The boot log prints a per-stage frame
@@ -450,16 +448,19 @@ seven-minute prompt check before an overnight run is always worth it.
   card, milestones page, the shop, the reset prompt and its pixel font),
   `progression.c` (the long game, the sand dollars and persistence),
   `icons.c` (baked pixel art), `audio.c` (the sound mixer), `notice.c` (the
-  milestone and low-battery announcements), `llm/` (4-bit engine, word
+  milestone announcements), `llm/` (4-bit engine, word
   tokenizer, the shared encoder)
 - `sim/` — the LVGL + SDL2 simulator, its persistence port, and the self-tests
-- `firmware/` — ESP-IDF app: display, touch, battery, IMU, RTC and audio
-  ports for the Waveshare board, the on-device advisor scheduler, the QEMU
-  harness, and the partition table
+- `firmware/` — ESP-IDF app: the display, touch and audio ports for the
+  Waveshare 4B (the board has no battery, IMU, or external RTC), the
+  on-device advisor scheduler, and the partition table
 - `model/` — the frozen [state/goal schema](model/schema.md), trace
   generation, training, evaluation, probes, and the 4-bit export
-- `installer/` — the browser installer page and the vendored ESP Web Tools
-  bundle; `tools/make_installer.py` assembles the upload folder
+- `installer/` — the browser installer page; the ESP Web Tools flasher is
+  not kept in the repo, it is bun-installed from the pinned `esp-web-tools`
+  package (`installer/package.json`); `tools/make_installer.py` assembles the
+  upload folder, which the Actions job publishes to the repo's `gh-pages`
+  branch (GitHub Pages)
 - `tools/` — the icon baker, the sound bank builder, the installer
   assembler, and a serial bench client
 - `assets/icons/` — the pixel-art source for the stats card, the badges,
@@ -486,10 +487,9 @@ seven-minute prompt check before an overnight run is always worth it.
 
 - ✅ Model: schema v4 (boredom, no shadow), 14.3M student, 4-bit export, evaluated
 - ✅ Simulator: the full tank with progression, self-tests, snapshots
-- ✅ Firmware: running on the real board at 25 to 30 fps and 3.7 s per
-  decision, with touch, auto-rotation, a battery gauge and log, and one
-  key for sleep and wake (a 20 min nap window, then the board powers itself
-  off to tens of microamps; from there a held press wakes it)
+- ✅ Firmware: running on the real 4B board at 25 to 30 fps and 3.7 s per
+  decision, with touch, the ES8311 speaker, and one key (BOOT) for sleep
+  and wake (a 90 s nap window, then deep sleep)
 - ✅ The living tank: growth, arrivals with courtship, trust, the hunger
   economy, upkeep chores, milestones, the reset prompt, the first-run setup
   (place the bubbles, a letter wheel to name each fry, a body color to pick),
@@ -499,21 +499,20 @@ seven-minute prompt check before an overnight run is always worth it.
   feed, the light, a trim, a card) and for the fish (eating, a spook, a
   fish coming to your finger), plus a welcome, a birth fanfare and
   milestone chimes with an on-screen announcement; the codec is only
-  powered while the tank is in your hands, and a low-battery notice keeps
-  the gauge on screen until it is charged; a settings page (from the
-  milestones page) for brightness and volume, with a mute
-- ✅ The light follows the hand: an optional idle rule (the motion sensor
-  and touch) puts a tank left on the desk to sleep; the double-tap by
-  default
+  powered while the tank is in your hands (the touch keeps it warm); a
+  settings page (from the milestones page) for brightness and volume, with
+  a mute
+- ✅ The light follows the hand: an optional idle rule (touch) puts a tank
+  left on the desk to sleep; the double-tap by default
 - ✅ Sand dollars: care earns points, the shop spends them; a sword plant,
   an algae-grazing snail and a swim-through castle to start; what you buy you place yourself,
   where along the floor and whether it stands behind, among or in front
   of the fish
-- ✅ Browser installer: one click from Chrome or Edge, hosted at
-  stratobuilds.com; updating is the same click and never erases a tank
-- 🔋 In progress: battery life. The first night on the board's power-off
-  and the awake draw with a full tank are being measured with the tank's
-  own log; what is in flight and how to pick it up is in
+- ✅ Browser installer: one click from Chrome or Edge, autodeployed to the
+  repo's GitHub Pages on every qualifying push
+- ✅ Power: the 4B is USB-C powered (no battery, no PMIC); its sleep is deep
+  sleep, and the tank's own log tracks it. What is in flight and how to
+  pick it up is in
   [docs/DEVICE.md](docs/DEVICE.md)
 - 🚧 Next: more to unlock: new fish species, more plants, corals, and more
   tank maintenance critters (urchins to keep the grass down)

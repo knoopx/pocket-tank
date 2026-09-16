@@ -1,11 +1,13 @@
 /* persist_port_esp.c — progression ports on the device: NVS blob + wall clock.
- * Wall clock: esp time (set from the PCF85063 RTC at boot in Track 4; until
- * then it is 0 on a cold boot, which simply disables the ravenous rule). */
+ * Wall clock: esp time, set from the chip clock at boot (the 4B has no
+ * external RTC); until it is set it is 0 on a cold boot, which simply
+ * disables the ravenous rule. */
 #include "progression.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
-#include <time.h>
+#include "esp_timer.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "persist";
 
@@ -35,6 +37,7 @@ bool persist_port_erase(void) {
     else ESP_LOGI(TAG, "every saved tank erased");
     return e == ESP_OK;
 }
-int64_t clock_port_now_unix(void) {
-    time_t now = time(NULL); return now > 1700000000 ? (int64_t)now : 0;   /* 0 until the RTC sets it */
-}
+/* the 4B has no external RTC: the wall clock is the chip's time since boot
+ * (esp_timer), read by progression_wake for "lived through" time */
+int64_t clock_port_now_unix(void) { return esp_timer_get_time() / 1000000; }
+

@@ -1,5 +1,5 @@
 /* notice.h - the announcement modals (docs/AUDIO.md section 4a, 2026-09-15):
- * a milestone the moment it is earned, a stage reached, low battery.
+ * a milestone the moment it is earned, a stage reached.
  *
  * Milestones are set in several places (progression.c, tank.c), so the
  * queue does not need hooks: notice_tick diffs each fish's ms_bits, the
@@ -19,7 +19,7 @@
 #include <stdint.h>
 #include "tank.h"
 
-enum { NOTICE_MILESTONE, NOTICE_TANK_MILESTONE, NOTICE_STAGE, NOTICE_LOW_BATTERY };
+enum { NOTICE_MILESTONE, NOTICE_TANK_MILESTONE, NOTICE_STAGE };
 typedef struct { int kind; int fish; uint32_t bit; float age; } notice_t;
 
 #define NOTICE_UP_S   6.0f
@@ -30,7 +30,6 @@ void notice_sync(const tank_t *t);
 void notice_tick(const tank_t *t, float dt, bool blocked);
 const notice_t *notice_current(void);      /* NULL = none up */
 void notice_dismiss(void);                 /* a tap */
-void notice_low_battery(void);             /* platform: the gauge fell to the threshold */
 int  notice_take_cue(void);                /* SND_* for a notice that just came up, else -1 */
 int  notice_pending(void);                 /* queued, not counting the one up */
 

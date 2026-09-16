@@ -1,11 +1,17 @@
 /* display_port.h — the ONLY platform-specific seam for the renderer.
  * The tank renders into an RGB565 buffer (common/render.c); this port ships
- * it to the panel. QEMU/bring-up: stub. Track 4: SH8601 over QSPI (V1 board)
- * or CO5300 (V2), rotated 90 degrees so the tank is landscape 448x368. */
+ * it to the panel: the 4B's ST7703 720x720 MIPI-DSI panel (the BSP's DPI
+ * path), with a stub port for QEMU / compile-only builds. */
 #ifndef DISPLAY_PORT_H
 #define DISPLAY_PORT_H
 #include <stdint.h>
 #include <stdbool.h>
+#define PANEL_W 720
+#define PANEL_H 720
+#define SCALED_W   PANEL_W    /* full glass width  */
+#define SCALED_H   PANEL_H    /* full glass height */
+#define GLASS_X_OFF 0
+#define GLASS_Y_OFF 0
 
 bool display_port_init(void);
 /* push a full TANK_W x TANK_H RGB565 frame; may return before DMA completes */

@@ -1,19 +1,17 @@
 #!/bin/bash
-# flash.sh - the only way to flash the tank. Archives the battery log and the
-# tank state first (tools/preflight.py -> docs/batlog/), then builds and
-# flashes the app; `--model` also writes the model partition. Refuses to run
-# without a preflight archive: battery measurements run in parallel with
-# feature work, and a reflash used to wipe the night's log (2026-09-15).
+# flash.sh - the only way to flash the tank. Builds and flashes the app;
+# `--model` also writes the model partition. Back up the save area first
+# (esptool read_flash 0x9000 0x6000 -> ~/Documents): a reflash wipes the
+# live tank, so keep the snapshot as the record of what was on it.
 #
-#   tools/flash.sh              # preflight, build, flash app
-#   tools/flash.sh --model      # ... and model/out/model_q4.bin at 0x290000
-#   tools/flash.sh --no-build   # preflight, flash the existing build
+#   tools/flash.sh              # build, flash app
+#   tools/flash.sh --model      # ... and model/out/model_q4.bin at 0x410000
+#   tools/flash.sh --no-build   # flash the existing build
 set -u
 cd "$(dirname "$0")/.."
 BUILD=~/.cache/pocket-tank/fw-build
-PORT=$(ls /dev/cu.usbmodem* 2>/dev/null | head -1)
-[ -n "$PORT" ] || { echo "flash: no /dev/cu.usbmodem* - wake the tank (BOOT) first"; exit 1; }
-tools/preflight.py || exit 1
+PORT=$(ls /dev/ttyACM* 2>/dev/null | head -1)
+[ -n "$PORT" ] || { echo "flash: no /dev/ttyACM* - wake the tank (BOOT) first"; exit 1; }
 . ~/esp/esp-idf/export.sh > /dev/null 2>&1 || { echo "flash: ESP-IDF export failed"; exit 1; }
 cd firmware
 if [[ " $* " != *" --no-build "* ]]; then
@@ -21,8 +19,8 @@ if [[ " $* " != *" --no-build "* ]]; then
   [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "flash: BUILD FAILED - nothing flashed"; exit 1; }
 fi
 if [[ " $* " == *" --model "* ]]; then
-  python -m esptool --chip esp32s3 -p "$PORT" -b 460800 write_flash 0x290000 ../model/out/model_q4.bin 2>&1 | grep -E "Wrote|verified|rror"
+  python -m esptool --chip esp32p4 -p "$PORT" -b 460800 write_flash 0x410000 ../model/out/model_q4.bin 2>&1 | grep -E "Wrote|verified|rror"
   sleep 3
 fi
 idf.py -B "$BUILD" -p "$PORT" flash 2>&1 | grep -E "verified|Hard resetting|rror" | tail -2
-echo "flash: done - the tank boots now; docs/batlog has the pre-flash archive (commit it)"
+echo "flash: done - the tank boots now"

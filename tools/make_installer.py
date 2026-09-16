@@ -2,8 +2,9 @@
 """make_installer.py - assemble the browser installer (ESP Web Tools).
 
 Gathers the firmware build's bootloader / partition table / app, the
-shipped model_q4.bin, the installer page and the vendored ESP Web Tools
-bundle into ONE static folder that any HTTPS host can serve as-is:
+shipped model_q4.bin, the installer page and the ESP Web Tools bundle
+(installed by bun into installer/node_modules, not kept in the repo)
+into ONE static folder that any HTTPS host can serve as-is:
 
     installer/dist/
         index.html          the page (version stamped in)
@@ -14,22 +15,24 @@ bundle into ONE static folder that any HTTPS host can serve as-is:
         manifest-erase.json the same parts behind the "start over" button:
                             ESP Web Tools' erase question first
         firmware/*.bin      bootloader, partition table, app, model
-        vendor/esp-web-tools-<tag>/*.js   the flasher (Apache-2.0, vendored so the
-                                    page has no third-party runtime deps;
-                                    the install dialog gets the one-line
+        vendor/esp-web-tools-<tag>/*.js   the flasher (Apache-2.0, from the bun-
+                                    installed esp-web-tools package; the
+                                    install dialog gets the one-line
                                     never_erase patch below at assembly)
 
 Offsets come from the build's flasher_args.json (bootloader / partition
 table / app) and from firmware/partitions.csv (the model partition), so a
 layout change can't silently ship a stale offset.
 
+    cd installer && bun install                    # the ESP Web Tools bundle
     tools/make_installer.py                      # default build dir
     tools/make_installer.py --build-dir path     # another idf.py -B dir
-    tools/make_installer.py --version 1.2.0      # instead of git describe
+    tools/make_installer.py --version 1.2.0       # instead of git describe
+    tools/make_installer.py --vendor path        # another bundle folder
 
 Web Serial needs a secure context: serve the folder over HTTPS (or from
 http://localhost for a local check: `python3 -m http.server -d installer/dist`)."""
-import argparse, datetime, hashlib, json, os, shutil, subprocess, sys
+import argparse, datetime, hashlib, json, os, re, shutil, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_BUILD = os.path.expanduser("~/.cache/pocket-tank/fw-build")
@@ -37,14 +40,22 @@ DEFAULT_BUILD = os.path.expanduser("~/.cache/pocket-tank/fw-build")
 # ESP Web Tools (10.4.0) has no manifest option for "install without erasing"
 # on a device that does not speak Improv: with new_install_prompt_erase the
 # dialog asks (checkbox off by default), without it the dialog ERASES first,
-# unconditionally. The tank's save would go with it. So the vendored dialog
+# unconditionally. The tank's save would go with it. So the dialog bundle
 # gets one edit at assembly: a manifest with "never_erase": true skips the
 # question and starts a plain install (bootloader / partition table / app /
-# model written at their offsets, NVS untouched). The edit is a literal
-# replace of the two click handlers; a vendor upgrade that changes the text
-# fails the build here instead of quietly shipping an erasing page.
-DIALOG_ERASE_CLICK = 'this._manifest.new_install_prompt_erase?this._state="ASK_ERASE":this._startInstall(!0)'
-DIALOG_NEVER_ERASE = 'this._manifest.new_install_prompt_erase?this._state="ASK_ERASE":this._startInstall(!this._manifest.never_erase)'
+# model written at their offsets, NVS untouched). The edit rewrites the
+# erase call in the two else-branches of the new_install_prompt_erase
+# checks; a bundle upgrade that changes them fails the build here instead
+# of quietly shipping an erasing page.
+# The npm dist of esp-web-tools 10.4.0 is formatted, not minified, and the
+# bare call _startInstall(true) also powers the "Erase User Data" button,
+# which must keep erasing - so the match is anchored on the else block.
+ERASE_ELSE = re.compile(
+    r'(\belse\s*\{\s*)((?://[^\n]*\n\s*)?)(this\._startInstall\(\s*)true(\s*\);)')
+
+
+def _never_erase(m):
+    return f"{m.group(1)}{m.group(2)}{m.group(3)}!this._manifest.never_erase{m.group(4)}"
 
 
 def patch_dialog(vendor_dir):
@@ -54,11 +65,11 @@ def patch_dialog(vendor_dir):
         sys.exit(f"{vendor_dir}: expected one install-dialog*.js, found {names}")
     path = os.path.join(vendor_dir, names[0])
     js = open(path).read()
-    n = js.count(DIALOG_ERASE_CLICK)
-    if n != 2:
-        sys.exit(f"{path}: the erase click handler occurs {n} times, expected 2 - ESP Web Tools "
+    matches = ERASE_ELSE.findall(js)
+    if len(matches) != 2:
+        sys.exit(f"{path}: the erase branches occur {len(matches)} times, expected 2 - ESP Web Tools "
                  "changed; re-check the never_erase patch before shipping the installer")
-    js = js.replace(DIALOG_ERASE_CLICK, DIALOG_NEVER_ERASE)
+    js = ERASE_ELSE.sub(_never_erase, js)
     open(path, "w").write(js)
     return names[0], hashlib.sha1(js.encode()).hexdigest()[:8]
 
@@ -88,6 +99,10 @@ def main():
                     else os.path.join(ROOT, "firmware", "build"))
     ap.add_argument("--model", default=os.path.join(ROOT, "model", "out", "model_q4.bin"))
     ap.add_argument("--out", default=os.path.join(ROOT, "installer", "dist"))
+    ap.add_argument("--vendor", default=os.path.join(ROOT, "installer", "node_modules",
+                    "esp-web-tools", "dist"),
+                    help="the ESP Web Tools bundle folder (install-button.js + install-dialog*.js "
+                         "from the bun-installed package); run `bun install` in installer/ first")
     ap.add_argument("--version", default=None)
     ap.add_argument("--manifest-url", default="manifest.json",
                     help="what the page's install button points at: the relative default for a "
@@ -120,7 +135,7 @@ def main():
     for off, src, pub in parts:
         shutil.copyfile(src, os.path.join(out, "firmware", pub))
         total += os.path.getsize(src)
-    shutil.copytree(os.path.join(ROOT, "installer", "vendor"), os.path.join(out, "vendor"))
+    shutil.copytree(a.vendor, os.path.join(out, "vendor", "esp-web-tools"))
     dialog, tag = patch_dialog(os.path.join(out, "vendor", "esp-web-tools"))
     # The bundle's file names are content hashes of the PRISTINE vendor, and
     # hosts serve .js with a year's max-age: a patched dialog under the old
@@ -130,7 +145,7 @@ def main():
     vendor = f"vendor/esp-web-tools-{tag}"
     os.rename(os.path.join(out, "vendor", "esp-web-tools"), os.path.join(out, vendor))
 
-    build = {"chipFamily": "ESP32-S3",
+    build = {"chipFamily": "ESP32-P4",
              "parts": [{"path": f"firmware/{pub}", "offset": off} for off, _, pub in parts]}
     manifest = {
         "name": "Pocket Tank",

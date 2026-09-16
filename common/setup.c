@@ -15,7 +15,7 @@
 #define C_KEY    0x0e2229
 #define C_TEXT   0xffffff
 #define C_CAPT   0x9fd8e2
-#define C_GO     0x155e58      /* BEGIN: the teal of a charging battery */
+#define C_GO     0x155e58      /* BEGIN: the lit teal (FISH_TEAL) */
 #define C_GO_E   0x38dcc7
 #define C_FILL   0x5f8a92      /* the family page's trait bars: a muted teal the parents' ticks stand out on */
 

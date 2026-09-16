@@ -13,13 +13,10 @@
 #include "setup.h"
 #include "director.h"
 #include "touch_port.h"
-#include "battery_port.h"
 #include "display_port.h"
 #include "brightness.h"
-#include "batlog.h"
 #include "codec_port.h"
 #include "audio_port.h"
-#include "imu_port.h"
 #include "audio.h"
 #include "notice.h"
 #include "esp_timer.h"
@@ -149,10 +146,7 @@ static void show_state(const tank_t *t) {
                  t->castle_z == DECOR_Z_BACK ? "BEHIND the grass" : "IN FRONT of the grass (the fish swim through)");
     ESP_LOGI(TAG, "nursery bed %d (a bed >= %.2f) | parked real tank: %s", tank_nursery_bed(t), (double)VEG_NURSERY,
              nvs_has("bk") ? "YES (restore)" : "no (this IS the real tank)");
-    float bf; bool chg;
-    if (battery_port_read(&bf, &chg))
-        ESP_LOGI(TAG, "battery %.0f%% %s, VBAT %d mV | brightness %d/255 (level %d%%)", bf * 100, chg ? "charging" : "on battery",
-                 battery_port_vbat_mv(), display_port_brightness(), brightness_level());
+    ESP_LOGI(TAG, "brightness %d/255 (level %d%%)", display_port_brightness(), brightness_level());
 }
 
 static void help(void) {
@@ -166,12 +160,10 @@ static void help(void) {
     ESP_LOGI(TAG, "shop [off] (the sand dollar page) | dollars [n] (grant n; the balance and the chore counts) | buy plant|snail|castle (at the price) | place [plant|castle] [x [behind|among|front]] (the piece's spot; no x = the page; the castle has no among)");
     ESP_LOGI(TAG, "reset (the keeper's confirm prompt, as BOOT + tap opens it) | reset yes|no (answer it here) - YES WIPES EVERY SAVE, a parked tank too");
     ESP_LOGI(TAG, "setup [off] (the first-run flow: welcome, names, colours; off drops the panel - the birth flow too) | name <fish|idx> <newname> (up to %d letters, saved)", FISH_NAME_MAX);
-    ESP_LOGI(TAG, "battery <pct>|real (a STAGED gauge, as if on battery at pct: the card's pill, and at 10 or less the low-battery notice + cue + the pill that stays; not saved) | snd battery (just the notice + cue)");
     ESP_LOGI(TAG, "kbd [wheel|grid|pages] (the name page's design: the wheel, or one of the two rejected keyboards of 09-13 - not saved, a boot is the wheel)");
     ESP_LOGI(TAG, "touch [bias <px>] (finger-landing correction: reported touches move up by px; not saved)");
-    ESP_LOGI(TAG, "pmic (AXP2101 dump) | pmic on|off <aldo1|aldo2..4|bldo1|bldo2|cpusldo|dcdc2..5|dldo1|dldo2> (experiments; boot trims the unused ones) | pmic trim");
     ESP_LOGI(TAG, "bright <0-255> (panel now; not saved) | level 100|60|30 (the keeper's setting, saved)");
-    ESP_LOGI(TAG, "batlog [clear] (the tank's own battery log: SoC/VBAT every 5 min awake, 30 min asleep, mA derived - read it after a night on battery) | codec (ES8311 registers) | deepsleep [N] (N: 5 s grace then deep sleep with an N s timer wake - one batlog window per N, BOOT wakes it; no N: the keeper's sleep, grace then power-off) | poweroff (save + PMIC cut now) | keytime [N] (N s of timing every PWR press - is a tap under the PMIC's 128 ms power-on hold?)");
+    ESP_LOGI(TAG, "codec (ES8311 registers) | deepsleep [N] (N: 5 s grace then deep sleep with an N s timer wake, BOOT wakes it; no N: the keeper's sleep, grace then deep sleep) | poweroff (save + deep sleep now - USB-C powered, no PMIC power-off)");
     ESP_LOGI(TAG, "overgrown (grass to the ceiling + fouled glass; fish stress climbs) | court (pair circles the reef now and every ~minute; fry at the next light-on) | arrive (the fry, now)");
 }
 
@@ -237,14 +229,6 @@ static void run(tank_t *t, char *line) {
         progression_slept(t, h * 3600.0f);      /* growth + the full-night badge, as a real wake would */
         ESP_LOGI(TAG, "slept %.1f h", h);
         show_state(t);
-    } else if (!strcmp(c, "imu")) {             /* a short trace of raw polls: is the table really still? */
-        int n = argc > 1 ? atoi(argv[1]) : 8; if (n < 1) n = 1; if (n > 40) n = 40;
-        for (int i = 0; i < n; i++) {               /* (the console runs in the tank task: poll here, the task is blocked) */
-            imu_port_poll(esp_timer_get_time());
-            int16_t a[3]; int m; imu_port_last(a, &m);
-            ESP_LOGI(TAG, "imu poll: g=[%6d %6d %6d] motion %5d %s", a[0], a[1], a[2], m, imu_port_moving() ? "MOVING" : "still");
-            vTaskDelay(pdMS_TO_TICKS(250));
-        }
     } else if (!strcmp(c, "settings")) {
         bool on = argc < 2 || strcmp(argv[1], "off");
         touch_port_show_settings(on); ESP_LOGI(TAG, "settings page %s", on ? "up (CLOSE ends it)" : "closed");
@@ -275,31 +259,23 @@ static void run(tank_t *t, char *line) {
         tank_decor_set(t, item, (float)atof(argv[a]), z); progression_save(t); z = tank_decor_z(t, item);
         ESP_LOGI(TAG, "%s at x %.0f, %s, saved", item == 2 ? "castle" : "plant", tank_decor_x(t, item),
                  item == 2 ? (z == DECOR_Z_BACK ? "BEHIND the grass" : "IN FRONT of the grass") : z == DECOR_Z_BACK ? "BEHIND the fish" : z == DECOR_Z_FRONT ? "IN FRONT of the fish" : "AMONG the fish");
-    } else if (!strcmp(c, "pmic")) {
-        if (argc > 2 && (!strcmp(argv[1], "on") || !strcmp(argv[1], "off")))
-            ESP_LOGI(TAG, "rail %s %s: %s", argv[2], argv[1], battery_port_set_rail(argv[2], !strcmp(argv[1], "on")) ? "ok" : "REFUSED");
-        else if (argc > 1 && !strcmp(argv[1], "trim")) battery_port_trim_rails();
-        else battery_port_dump();
     } else if (!strcmp(c, "bright") && argc > 1) {
         int v = atoi(argv[1]); if (v < 0) v = 0; if (v > 255) v = 255;
         display_port_set_brightness((uint8_t)v);
         ESP_LOGI(TAG, "brightness %d/255", v);
     } else if (!strcmp(c, "deepsleep")) {
         int n = argc > 1 ? atoi(argv[1]) : 0;
-        ESP_LOGI(TAG, "%s - the USB port vanishes until the wake", n > 0 ? "5 s grace, then deep sleep with the timer" : "the keeper's sleep: the grace, then power-off (the PWR key boots it)");
+        ESP_LOGI(TAG, "%s - the USB port vanishes until the wake", n > 0 ? "5 s grace, then deep sleep with the timer" : "the keeper's sleep: the grace, then deep sleep (BOOT wakes it)");
         vTaskDelay(pdMS_TO_TICKS(50));
         device_sleep(n);
-    } else if (!strcmp(c, "keytime")) {
-        int n = argc > 1 ? atoi(argv[1]) : 15; if (n < 1) n = 1; if (n > 60) n = 60;
-        battery_port_key_trace(n);
     } else if (!strcmp(c, "poweroff")) {
-        ESP_LOGI(TAG, "power-off now (the PWR key or USB boots it) - the USB port vanishes");
+        ESP_LOGI(TAG, "power-off now: save + deep sleep (the 4B is USB-C powered, no PMIC power-off) - the USB port vanishes");
         vTaskDelay(pdMS_TO_TICKS(50));
         device_poweroff();
     } else if (!strcmp(c, "snd")) {
         /* snd <cue> [pitch_q8] | snd off|quiet|normal | snd stop <cue> | snd list | snd settle <codec ms> <amp ms> | snd idle <s> */
         if (argc < 2 || !strcmp(argv[1], "list")) {
-            ESP_LOGI(TAG, "audio %s, volume %d (0 off 1 quiet 2 normal), imu motion %d (%s)", audio_port_state(), audio_port_volume(), imu_port_motion(), imu_port_moving() ? "moving" : "still");
+            ESP_LOGI(TAG, "audio %s, volume %d (0 off 1 quiet 2 normal)", audio_port_state(), audio_port_volume());
             for (int i = 0; i < SND_COUNT; i++)
                 ESP_LOGI(TAG, "  %-13s %s%s", SND_CUES[i].name, SND_CUES[i].n_var ? "ready" : "deferred", SND_CUES[i].loop ? " (loop)" : "");
         } else if (!strcmp(argv[1], "off") || !strcmp(argv[1], "quiet") || !strcmp(argv[1], "normal")) {
@@ -310,8 +286,6 @@ static void run(tank_t *t, char *line) {
             audio_port_tune(atoi(argv[2]), atoi(argv[3]), 0); ESP_LOGI(TAG, "snd settle %s %s", argv[2], argv[3]);
         } else if (!strcmp(argv[1], "idle") && argc > 2) {          /* 0 = warm while awake, N = auto-off after N s of silence */
             audio_port_tune(-1, -1, atoi(argv[2])); ESP_LOGI(TAG, "snd idle %s", argv[2]);
-        } else if (!strcmp(argv[1], "battery")) {
-            notice_low_battery(); ESP_LOGI(TAG, "low-battery notice queued");
         } else {
             int id = audio_cue_by_name(argv[1]);
             if (id < 0) { ESP_LOGW(TAG, "no cue %s (snd list)", argv[1]); return; }
@@ -320,9 +294,6 @@ static void run(tank_t *t, char *line) {
         }
     } else if (!strcmp(c, "codec")) {
         codec_port_dump();
-    } else if (!strcmp(c, "batlog")) {
-        if (argc > 1 && !strcmp(argv[1], "clear")) { batlog_clear(); ESP_LOGI(TAG, "battery log cleared"); }
-        else batlog_print();
     } else if (!strcmp(c, "level") && argc > 1) {
         if (!brightness_set_level(atoi(argv[1]))) ESP_LOGW(TAG, "level is 100, 60 or 30");
     } else if (!strcmp(c, "reset")) {
@@ -334,10 +305,6 @@ static void run(tank_t *t, char *line) {
     } else if (!strcmp(c, "setup")) {
         if (argc > 1 && !strcmp(argv[1], "off")) { setup_cancel(t); ESP_LOGI(TAG, "setup panel dropped%s", progression_setup_pending() || progression_newborn() >= 0 ? " (still owed: it returns at the next boot)" : ""); }
         else { setup_begin(t); ESP_LOGI(TAG, "setup: welcome page up (tap through on the glass)"); }
-    } else if (!strcmp(c, "battery")) {              /* battery <pct>|real: a staged gauge for the pill + the low-battery rule */
-        if (argc > 1) device_fake_battery(!strcmp(argv[1], "real") ? -1 : atoi(argv[1]));
-        if (argc > 1 && strcmp(argv[1], "real")) ESP_LOGI(TAG, "gauge STAGED at %d%% on battery (10 or less: the notice, the cue, the pill stays up; `battery real` ends it)", atoi(argv[1]));
-        else ESP_LOGI(TAG, "the real gauge (battery <pct> stages one)");
     } else if (!strcmp(c, "kbd")) {                  /* the name page's rejected designs, to be shown: kbd wheel|grid|pages */
         if (argc > 1) setup_set_keyboard(!strcmp(argv[1], "grid") ? SETUP_KBD_GRID : !strcmp(argv[1], "pages") ? SETUP_KBD_PAGES : SETUP_KBD_WHEEL);
         ESP_LOGI(TAG, "name page: %s", setup_keyboard() == SETUP_KBD_GRID ? "GRID (the first cut: 7 x 4 keys on a panel)" :

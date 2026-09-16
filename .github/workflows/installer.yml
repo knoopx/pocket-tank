@@ -1,10 +1,15 @@
-# Browser installer, published to GitHub Pages on every push to main that
-# touches the firmware, the shared tank code, the model or the installer:
-# build the firmware with the same ESP-IDF the project uses, assemble
-# installer/dist (page + manifest + binaries + vendored ESP Web Tools) and
-# deploy it. Pages serves HTTPS with open CORS, so a page on another site
-# can point its <esp-web-install-button> at this manifest and always offer
-# the firmware of the latest push.
+# Browser installer, autodeployed to GitHub Pages on every push to main that
+# touches the firmware, the shared tank code, the model, the installer page
+# or the assembler: build the firmware with the project's ESP-IDF, install
+# the ESP Web Tools bundle with bun (it is not kept in the repo), assemble
+# installer/dist (page + manifests + binaries + flasher) and publish the
+# folder to the gh-pages branch. The site is served at
+# https://knoopx.github.io/pocket-tank-p4/ - no CNAME, the default Pages URL.
+#
+# The deploy fetches the gh-pages branch into a worktree, builds over it and
+# pushes it back. The page fetches its manifest from its own origin, so a
+# button on any other site pointing at this manifest always offers the
+# firmware of the latest push.
 name: installer
 
 on:
@@ -20,12 +25,10 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
-  group: pages
+  group: gh-pages
   cancel-in-progress: true
 
 jobs:
@@ -35,27 +38,53 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0          # git describe wants the tags
-      - name: Build the firmware (ESP-IDF v5.4.1, esp32s3)
+
+      - name: Build the firmware (ESP-IDF v5.5, esp32p4)
         uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: v5.4.1
-          target: esp32s3
+          esp_idf_version: v5.5
+          target: esp32p4
           path: firmware
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Get bun cache directory path
+        id: bun-cache-dir-path
+        run: echo "dir=$(bun pm cache path)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache bun dependencies
+        uses: actions/cache@v4
+        id: bun-cache
+        with:
+          path: ${{ steps.bun-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('installer/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install the flasher bundle
+        run: cd installer && bun install --frozen-lockfile
+
       - name: Assemble the installer
         run: |
           python3 tools/make_installer.py --build-dir firmware/build --out installer/dist
-          touch installer/dist/.nojekyll
           ls -la installer/dist installer/dist/firmware
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: installer/dist
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Setup git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          # first run: the remote has no gh-pages branch yet, start it from main
+          git fetch --no-tags --prune --depth=1 origin gh-pages || git branch gh-pages
+          git worktree add dist gh-pages
+
+      - name: Publish to the gh-pages branch
+        run: |
+          find dist -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a installer/dist/. dist/
+          cd dist
+          git add -f .
+          git commit -m "$(date +%Y%m%d)" || true
+          git push -f origin HEAD:gh-pages

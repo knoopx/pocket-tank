@@ -5,7 +5,7 @@
  * tank task only calls audio_port_play, which enqueues and returns.
  *
  * Power (docs/AUDIO.md section 3): idle = codec down, amp low, rail off,
- * I2S stopped - the state the battery pass measured. The first cue after
+ * I2S stopped. The first cue after
  * silence brings everything up (~30 ms); 2 s after the last voice ends it
  * all goes down again. audio_port_sleep() forces that before a drowse. */
 #ifndef AUDIO_PORT_H

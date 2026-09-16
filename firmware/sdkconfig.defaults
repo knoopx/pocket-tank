@@ -1,35 +1,44 @@
-# pocket-tank — ESP32-S3R8, 8 MB octal PSRAM, 16 MB flash
-CONFIG_IDF_TARGET="esp32s3"
+# pocket-tank — Waveshare ESP32-P4-WIFI6-Touch-LCD-4B (4-inch 720x720)
+# P4-only build (target esp32p4). WiFi / the ESP32-C6 / esp-hosted /
+# esp_wifi_remote are INTENTIONALLY OFF: the tank is offline and the LLM
+# runs on-device from flash.
+
+CONFIG_IDF_TARGET="esp32p4"
+
+# 16 MB flash, DIO mode (the 4B's flash + hex PSRAM run DIO at 80 MHz,
+# mirroring the ai-display build)
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# 32 MB hex (X16) PSRAM at 80 MHz, XIP: app instructions/data live in PSRAM
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+CONFIG_SPIRAM_FLASH_LOAD_TO_PSRAM=y
+
+# RGB565 720x720 ST7703 MIPI-DSI panel (the 4B BSP's DPI path; values mirrored
+# from the ai-display skeleton's sdkconfig)
+CONFIG_BSP_LCD_TYPE_720_720_4_INCH=y
+CONFIG_BSP_LCD_COLOR_FORMAT_RGB565=y
+CONFIG_BSP_LCD_DPI_BUFFER_NUMS=3
+
+# the P4 is RISC-V with no PIE SIMD: scalar LLM kernel (unconditional)
+
+# the 4B's 16 MB custom partition table (8 MB raw model partition)
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
-# PSRAM: octal, 80 MHz, available to malloc; memtest off to save boot time
-CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
-CONFIG_SPIRAM_SPEED_80M=y
-CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=8192
-CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
-CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
-CONFIG_SPIRAM_MEMTEST=n
-# flash: octal-capable board; QIO fast; mmap'd model partition read through cache
-CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
-CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
-# no radio at runtime
-CONFIG_ESP_WIFI_ENABLED=n
-CONFIG_BT_ENABLED=n
-# generous main stack for the tank/render task; inference has its own task
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
-CONFIG_FREERTOS_HZ=1000
-CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
-CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
-# real board: AMOLED + touch
-CONFIG_POCKET_TANK_DISPLAY_SH8601=y
-CONFIG_POCKET_TANK_TOUCH_FT3168=y
-CONFIG_POCKET_TANK_AUDIO_ES8311=y
-CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
-CONFIG_ESP32S3_DATA_CACHE_64KB=y
-CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+# LVGL 9.6's registry manifest gates its optional codec components (freetype,
+# libjpeg-turbo, libpng, lz4) on $CONFIG{LV_USE_*} if-clauses. IDF 5.5's
+# component manager raises MissingKconfigError when a symbol is undefined,
+# so the symbols are defined here (all off - the tank needs no font/image
+# decoders) and the optional components are never selected.
+CONFIG_LV_USE_FREETYPE=n
+CONFIG_LV_USE_LIBJPEG_TURBO=n
+CONFIG_LV_USE_LIBPNG=n
+CONFIG_LV_USE_LZ4=n
+CONFIG_LV_USE_LZ4_INTERNAL=n

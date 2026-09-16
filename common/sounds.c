@@ -17,8 +17,7 @@ const snd_clip_t SND_CLIPS[SND_N_CLIPS] = {
     { 124606u, 17840u },
     { 142446u, 37138u },
     { 179584u, 36301u },
-    { 215885u, 21579u },
-    { 237464u, 27787u },
+    { 215885u, 27787u },
 };
 
 const snd_cue_t SND_CUES[SND_COUNT] = {
@@ -44,6 +43,5 @@ const snd_cue_t SND_CUES[SND_COUNT] = {
     { "stage_up", 14, 1, 0, 262 },
     { "sleep", 15, 0, 0, 0 },
     { "wake", 15, 0, 0, 0 },
-    { "low_battery", 15, 1, 0, 131 },
-    { "error", 16, 1, 0, 151 },
+    { "error", 15, 1, 0, 151 },
 };

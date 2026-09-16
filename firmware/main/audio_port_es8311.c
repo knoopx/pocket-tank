@@ -1,9 +1,11 @@
-/* audio_port_es8311.c - I2S -> ES8311 -> NS4150B -> the 12 mm speaker.
- * See audio_port.h. Pins from resources/ESP32-S3-Touch-AMOLED-1.8.pdf. */
+/* audio_port_es8311.c - I2S -> ES8311 -> the on-board amp (GPIO 53) ->
+ * the speaker, for the Waveshare ESP32-P4-WIFI6-Touch-LCD-4B.
+ * See audio_port.h. Pins from the 4B schematic: SCLK=12 MCLK=13 LCLK=10
+ * DOUT=9 DSIN=11 AMP_EN=53 (the codec talks ES8311 over the BSP I2C bus,
+ * owned by codec_port - initialised before us from board_i2c_bus()). */
 #include "audio_port.h"
 #include "audio.h"
 #include "codec_port.h"
-#include "battery_port.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -16,14 +18,13 @@
 
 static const char *TAG = "audio";
 
-#define PIN_I2S_MCLK  16
-#define PIN_I2S_BCLK  9
-#define PIN_I2S_WS    45
-#define PIN_I2S_DOUT  8        /* ESP -> codec DSDIN */
-#define PIN_AMP_EN    46       /* NS4150B CTRL, 10k pulldown on the board */
+#define PIN_I2S_MCLK  13
+#define PIN_I2S_BCLK  12
+#define PIN_I2S_WS    10
+#define PIN_I2S_DOUT  9        /* ESP -> codec DSDIN */
+#define PIN_AMP_EN    53       /* the 4B's speaker amp enable */
 #define BLOCK         160      /* 10 ms at 16 kHz */
-#define IDLE_US       (2 * 1000000LL)
-#define CODEC_RAIL    "aldo1"  /* A3V3: the codec's AVDD + the mic */
+#define IDLE_US       (2 * 1000000)
 
 extern const uint8_t _binary_sounds_bin_start[];
 extern const uint8_t _binary_sounds_bin_end[];
@@ -37,31 +38,27 @@ static int64_t s_quiet_since;
 static int s_volume = 2;
 static int16_t s_buf[BLOCK];
 /* cold-start settle, tunable live (director `snd settle <codec ms> <amp ms>`,
-   `snd idle <s>`) until the bench says what the DAC and the NS4150B need */
+   `snd idle <s>`) until the bench says what the DAC and the amp need */
 static int s_settle_codec_ms = 150, s_settle_amp_ms = 100;
 /* the codec + amp need > 250 ms from cold and a tap's dwell cannot hide
    that (a cold card cue was lost), so the port stays warm while the tank is
-   HANDLED: any touch or IMU motion (main.c -> audio_port_prewarm) brings it
-   up and restarts this idle clock, and it goes down idle_us after the last
-   touch, motion or sound - on a table, silent. 0 = warm while awake
-   (~5-7 mA of the ~96 mA awake draw); `snd idle N` sets it live. */
+   HANDLED: any touch (main.c -> audio_port_prewarm) brings it up and
+   restarts this idle clock, and it goes down idle_us after the last touch
+   or sound - on a table, silent. 0 = warm while awake; `snd idle N` sets it
+   live. */
 static int64_t s_idle_us = 5 * 1000000LL;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
 static void amp(bool on) { gpio_set_level(PIN_AMP_EN, on); }
 
-/* Deep sleep (2026-09-16, the night the tank died): the I2S lines and the
- * amp's CTRL are the ESP's outputs into ICs that stay powered on VCC3V3 all
- * night (the codec's DVDD/PVDD, the NS4150B). In deep sleep an un-held
- * digital pad is neither driven nor pulled - and esp-idf isolates the REST
- * of the digital pads only once digital hold is on (sleep_gpio.c: without
- * it "the bottom current of deep sleep will be higher than light sleep",
- * which is exactly what the batlog measured: ~15 mA vs the drowse's 4.7).
- * So before esp_deep_sleep_start: each of these a plain GPIO, driven low,
- * held. The codec is already down (audio_port_sleep) and the wake is a
- * reboot; audio_port_init releases the holds before the drivers claim the
- * pins again. */
+/* Deep sleep: the I2S lines and the amp's enable are the ESP's outputs into
+ * ICs that stay powered. In deep sleep an un-held digital pad is neither
+ * driven nor pulled - and esp-idf isolates the rest of the digital pads only
+ * once digital hold is on. So before esp_deep_sleep_start: each of these a
+ * plain GPIO, driven low, held. The codec is already down (audio_port_sleep)
+ * and the wake is a reboot; audio_port_init releases the holds before the
+ * drivers claim the pins again. */
 static const gpio_num_t QUIET_PINS[] = { PIN_I2S_MCLK, PIN_I2S_BCLK, PIN_I2S_WS, PIN_I2S_DOUT, PIN_AMP_EN };
 void audio_port_deep_sleep_pins(void) {
     for (size_t i = 0; i < sizeof QUIET_PINS / sizeof QUIET_PINS[0]; i++) {
@@ -82,28 +79,25 @@ static void write_silence(int ms) {
     for (int i = 0; i < ms / 10; i++) i2s_channel_write(s_tx, s_buf, sizeof s_buf, &w, 100);
 }
 
-/* power up: rail -> clocks -> codec -> zeros -> amp (pops stay inside) */
+/* power up: clocks -> codec -> zeros -> amp (pops stay inside) */
 static void bring_up(void) {
     int64_t t0 = esp_timer_get_time();
-    battery_port_set_rail(CODEC_RAIL, true);
     vTaskDelay(pdMS_TO_TICKS(5));
     i2s_channel_enable(s_tx);                 /* MCLK/BCLK/LRCK running before the CSM starts */
     bool ok = codec_port_up();
     write_silence(s_settle_codec_ms);         /* the DAC's vmid / reference settle (fast charge, then normal) */
     codec_port_settled();
     amp(true);
-    write_silence(s_settle_amp_ms);           /* the NS4150B's own start-up (pop suppression): an 80 ms card
-                                                 cue landed inside it at 30 ms, and mostly still at 30+40 */
+    write_silence(s_settle_amp_ms);           /* the amp's own start-up (pop suppression) */
     s_up = true; s_quiet_since = 0;
     ESP_LOGI(TAG, "up in %lld ms%s", (esp_timer_get_time() - t0) / 1000, ok ? "" : " (codec writes FAILED)");
 }
-/* power down: amp -> zeros -> clocks off -> codec down -> rail */
+/* power down: amp -> zeros -> clocks off -> codec down */
 static void bring_down(void) {
     amp(false);
     write_silence(10);
     i2s_channel_disable(s_tx);
     codec_port_down();
-    battery_port_set_rail(CODEC_RAIL, false);
     s_up = false;
     ESP_LOGI(TAG, "down (idle)");
 }
@@ -168,7 +162,7 @@ bool audio_port_init(i2c_master_bus_handle_t bus) {
     xTaskCreatePinnedToCore(player, "audio", 4096, NULL, 6, &s_task, 1);
     s_ok = true;
     int present = 0; for (int i = 0; i < SND_COUNT; i++) present += SND_CUES[i].n_var > 0;
-    ESP_LOGI(TAG, "%d of %d cues, bank %u KB in flash, volume %d; warm while handled (touch / IMU), down %lld s after", present, SND_COUNT, (unsigned)(SND_BANK_BYTES / 1024), s_volume, s_idle_us / 1000000);
+    ESP_LOGI(TAG, "%d of %d cues, bank %u KB in flash, volume %d; warm while handled (touch), down %lld s after", present, SND_COUNT, (unsigned)(SND_BANK_BYTES / 1024), s_volume, s_idle_us / 1000000);
     return true;
 }
 

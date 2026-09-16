@@ -2,33 +2,37 @@
 
 Plug the board in, open a page, click Install: the same "flash it from the
 browser" flow ESPHome and Home Assistant use ([ESP Web
-Tools](https://esphome.github.io/esp-web-tools/), Apache-2.0, vendored under
-`vendor/`). Chrome or Edge on a desktop; it uses Web Serial, which Safari
+Tools](https://esphome.github.io/esp-web-tools/), Apache-2.0). The bundle is
+not kept in the repo: `installer/package.json` pins `esp-web-tools` and bun
+installs it into `installer/node_modules/` - in the Actions job and for local
+builds alike. Chrome or Edge on a desktop; it uses Web Serial, which Safari
 and Firefox don't have.
 
 ## Build the upload folder
 
 ```
-idf.py -B ~/.cache/pocket-tank/fw-build build     # in firmware/ (or any -B dir)
-tools/make_installer.py                            # -> installer/dist/
-python3 -m http.server -d installer/dist 8765      # local check at http://localhost:8765
+cd firmware && idf.py build            # (or any -B dir)
+cd installer && bun install            # the ESP Web Tools bundle
+python3 tools/make_installer.py        # -> installer/dist/
+python3 -m http.server -d installer/dist 8765    # local check at http://localhost:8765
 ```
 
 The page follows stratobuilds.com's design (the `#f8f8f8` page, white /
 `#222` / lavender cards at 10px, Inter Tight and Roboto Mono from Google
 Fonts, the red button). When only the page changed, re-uploading
-`index.html` is enough - the binaries and `vendor/` are untouched.
+`index.html` is enough - the binaries and the flasher folder are untouched.
 
 `installer/dist/` is the whole thing: `index.html`, `manifest.json`,
 `manifest-erase.json`, `firmware/*.bin` (bootloader, partition table, app,
-model), `vendor/`. The offsets in the manifests come from the build's
-`flasher_args.json` and from `firmware/partitions.csv`, and the page carries
-the git version. It is gitignored: rebuild it for every release.
+model), `vendor/esp-web-tools-<tag>/`. The offsets in the manifests come from
+the build's `flasher_args.json` and from `firmware/partitions.csv`, and the
+page carries the git version. It is gitignored: rebuild it for every release.
 
 ## Updating never erases (the two manifests, and one patched line)
 
 The tank's save lives in NVS at `0x9000`; the four parts sit at `0x0`,
-`0x8000`, `0x10000` and `0x290000`, so a plain write of the four leaves it
+`0x8000`, `0x10000` and `0x410000` (the model partition, per
+`firmware/partitions.csv`), so a plain write of the four leaves it
 alone and the tank carries on after an update (`tools/flash.sh` does the same
 writes every day). The catch was in the dialog: ESP Web Tools 10.4.0 has no
 manifest option for "install, don't erase" on a device without Improv.
@@ -39,8 +43,9 @@ it the dialog erases the chip first, unconditionally. So:
   `make_installer.py` patches the copied `install-dialog-*.js` at assembly:
   the two click handlers that read `_startInstall(!0)` (erase) become
   `_startInstall(!this._manifest.never_erase)`. The build fails loudly if
-  the handler text is not found exactly twice, so a vendor upgrade can't
-  ship an erasing page by accident. `vendor/` itself stays pristine.
+  the handler text is not found exactly twice, so a bundle upgrade can't
+  ship an erasing page by accident. The bun-installed bundle itself stays
+  pristine.
 - `manifest-erase.json` (the "Erase the board and install fresh" button)
   is the same parts with the erase question, for a board that is stuck or
   a keeper who wants a clean flash. The on-device reset (hold BOOT, tap the
@@ -53,35 +58,20 @@ builds; `sim/fishsim --selftest-sleep` covers both.
 
 ## It updates itself (GitHub Pages)
 
-`.github/workflows/installer.yml` in the PUBLIC repo builds the firmware
-with ESP-IDF v5.4.1 on every push to `main` that touches `firmware/`,
-`common/`, `model/out/`, `installer/` or the assembler, runs
-`tools/make_installer.py`, and deploys the folder to
-**https://mediacutlet.github.io/pocket-tank/**. Pages serves HTTPS with
-`Access-Control-Allow-Origin: *`, so the copy on stratobuilds.com points
-its button at that manifest:
-
-```
-tools/make_installer.py --manifest-url https://mediacutlet.github.io/pocket-tank/manifest.json --out /tmp/site
-```
-
-and that `index.html` PLUS its `vendor/esp-web-tools-<tag>/` folder live on
-the site - the never-erase patch is in the vendor's dialog bundle. An old
-`vendor/` next to the new manifest erased every install without asking
-(the 09-11 upload, found 2026-09-18), and the host serves `.js` with a
-year's max-age, so the folder name now carries the patched dialog's hash.
-One command builds, uploads over ssh (host `stratobuilds`), purges
-SiteGround's dynamic cache and checks the live URL:
-
-```
-pocket-tank/tools/publish_site_installer.sh
-```
-
-Run it whenever the page, the vendored ESP Web Tools or the patch changes.
-The page fetches the manifest on load and shows the version and build date of what it will actually flash,
-so pushing to the public repo is the whole release step: no upload, no
-cache purge. (Manual failure mode: the Actions run is red - `gh run list
---repo mediacutlet/pocket-tank`.)
+`.github/workflows/installer.yml` builds the firmware with ESP-IDF v5.5
+(target `esp32p4`) on every push to `main` that touches `firmware/`,
+`common/`, `model/out/`, `installer/` or the assembler, installs the flasher
+bundle with bun (pinned in `installer/package.json`), runs
+`tools/make_installer.py`, and pushes the assembled folder to the `gh-pages`
+branch: fetch it into a worktree, build over it, push it back - no CNAME: the site is the default Pages
+URL, **https://knoopx.github.io/pocket-tank-p4/**. Pages serves HTTPS with
+`Access-Control-Allow-Origin: *`, so a page on any other site can point its
+`<esp-web-install-button>` at
+`https://knoopx.github.io/pocket-tank-p4/manifest.json` and always offer the
+firmware of the latest push. The page fetches the manifest on load and shows
+the version and build date of what it will actually flash, so pushing to the
+repo is the whole release step: no upload, no cache purge. (Manual failure
+mode: the Actions run is red - `gh run list --repo knoopx/pocket-tank-p4`.)
 
 ## Host it
 
@@ -89,9 +79,9 @@ Web Serial needs a secure context, so the page must be on **HTTPS** (or
 `localhost`). Any static host works; the manifest and the `.bin` files must be
 fetchable from the page's origin (or send CORS headers).
 
-**stratobuilds.com (WordPress behind Cloudflare):** upload `installer/dist/`
-as a folder next to WordPress, e.g. `public_html/pocket-tank/`, and link
-`https://stratobuilds.com/pocket-tank/`. Being a plain folder it is outside
+**WordPress behind Cloudflare:** upload `installer/dist/` as a folder next to
+WordPress, e.g. `public_html/pocket-tank/`, and link
+`https://your-host/pocket-tank/`. Being a plain folder it is outside
 WordPress, so themes, caching and security plugins don't touch it. Things to
 check once:
 
@@ -107,8 +97,10 @@ check once:
   purge `/pocket-tank/*` (the manifest carries the version, so a stale
   cache shows an old version string on the page).
 
-**GitHub Pages** (the public repo) is the other easy option: push `dist/` to
-a `gh-pages` branch or a `docs/installer/` folder. Pages serves HTTPS and
+**GitHub Pages** is the built-in option: the workflow pushes the assembled
+folder to the `gh-pages` branch on every qualifying push, and the site is the
+default Pages URL for the repo - no CNAME, no
+Pages settings to configure. Pages serves HTTPS and
 `Access-Control-Allow-Origin: *`, so the button can even live on a WordPress
 page (Custom HTML block with the `<script type="module">` tag and the
 `<esp-web-install-button manifest="https://...manifest.json">` element)
@@ -131,5 +123,5 @@ backup of the save area for the cautious.
 The artifact set in `dist/firmware/` at the manifest's offsets was written to
 the real board with `esptool.py write_flash` (the exact operation ESP Web
 Tools performs, from the same files), and the tank booted; the page, manifest
-and vendor bundle were checked from a local server. The browser's own port
+and flasher bundle were checked from a local server. The browser's own port
 picker is a native dialog, so the click-through itself is a human test.

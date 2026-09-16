@@ -1,4 +1,4 @@
-/* brightness.h - the panel brightness policy (2026-09-11, the battery pass).
+/* brightness.h - the panel brightness policy.
  * A user level, 100 / 60 / 30 %, picked on the settings page (2026-09-15;
  * before that a row at the foot of the milestones page) or `level N` on
  * the director, and kept in NVS

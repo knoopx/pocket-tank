@@ -62,15 +62,10 @@ void notice_tick(const tank_t *t, float dt, bool blocked) {
     s_cur = s_q[0]; s_cur.age = 0;
     memmove(&s_q[0], &s_q[1], sizeof(notice_t) * (size_t)(s_qn - 1)); s_qn--;
     s_up = true;
-    s_cue = s_cur.kind == NOTICE_STAGE ? SND_STAGE_UP : s_cur.kind == NOTICE_LOW_BATTERY ? SND_LOW_BATTERY : SND_MILESTONE;
+    s_cue = s_cur.kind == NOTICE_STAGE ? SND_STAGE_UP : SND_MILESTONE;
 }
 
 const notice_t *notice_current(void) { return s_up ? &s_cur : NULL; }
 void notice_dismiss(void) { if (s_up) { s_up = false; s_gap = NOTICE_GAP_S; } }
-void notice_low_battery(void) {
-    for (int i = 0; i < s_qn; i++) if (s_q[i].kind == NOTICE_LOW_BATTERY) return;
-    if (s_up && s_cur.kind == NOTICE_LOW_BATTERY) return;
-    push(NOTICE_LOW_BATTERY, -1, 0);
-}
 int notice_take_cue(void) { int c = s_cue; s_cue = -1; return c; }
 int notice_pending(void) { return s_qn; }
