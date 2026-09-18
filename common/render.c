@@ -1,4 +1,4 @@
-/* render.c — porthole look: deep gradient water, AMOLED-black floor, procedural
+/* render.c — rounded-square-frame look: bright gradient water, procedural
  * fish (body polygon + animated tail + earned markings), bubbles, reef fronds
  * that grow with the tank's milestones. Everything is drawn
  * into a bare RGB565 buffer; night dims the palette. */
@@ -7,6 +7,7 @@
 #include "progression.h"
 #include "tank_events.h"
 #include "setup.h"
+#include "palette.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -24,7 +25,7 @@ static ctx_t ctx_full(uint16_t *fb, int stride, float dim) {
 #define CTX_PX(c, x, y) ((c)->fb[((y) - (c)->oy) * (c)->stride + ((x) - (c)->ox)])
 
 /* Dirty mask (2026-09-01): one bit per pixel, set by everything drawn over
- * the baked scene (px, span, blends), cleared every frame. The porthole
+ * the baked scene (px, span, blends), cleared every frame. The rounded-square
  * vignette re-apply walks the mask instead of comparing each pixel with the
  * scene cache (32 pixels per word, no scene reads), and a pixel that already
  * had its vignette applied inline (frond spans, span_final) is simply not
@@ -191,8 +192,8 @@ static void draw_fish_core(ctx_t *c, const fish_t *f, float clock, bool asleep, 
     float ch = cosf(f->heading), sh = sinf(f->heading);
     bool elder = f->stage == STAGE_ELDER, grown = f->stage >= STAGE_ADULT;
     float tail_len = elder ? 1.22f : 1.0f;
-    uint32_t body = mix(mix(f->color, 0xf25b65, stress * 0.22f), 0x7a8a8e, pale);
-    uint32_t fin  = mix(mix(f->fin, 0xf25b65, stress * 0.18f), 0x5a6a6e, pale);
+    uint32_t body = mix(mix(f->color, FISH_ACCENT_RED, stress * 0.22f), FISH_HUNGRY, pale);
+    uint32_t fin  = mix(mix(f->fin, FISH_ACCENT_RED, stress * 0.18f), FISH_HUNGRY_FIN, pale);
 #define TX(lx, ly) (f->x + ((lx) * ch - (ly) * roll * sh) * f->size)
 #define TY(lx, ly) (f->y + ((lx) * sh + (ly) * roll * ch) * f->size)
 
@@ -228,10 +229,10 @@ static void draw_fish_core(ctx_t *c, const fish_t *f, float clock, bool asleep, 
                      2 * mark, (1.5f + 3.5f * rmag) * mark, f->accent, 150);
     /* eye — closed to a lid line when asleep (resting at night) */
     if (asleep) {
-        fill_ellipse(c, TX(9, -3), TY(9, -3), 2.2f, 0.7f, 0x9fb4b8, 200);
+        fill_ellipse(c, TX(9, -3), TY(9, -3), 2.2f, 0.7f, UI_STEEL, 200);
     } else {
-        fill_ellipse(c, TX(9, -3), TY(9, -3), 2.2f, 2.2f, 0xffffff, 255);
-        fill_ellipse(c, TX(9.7f, -3), TY(9.7f, -3), 1.1f, 1.1f, 0x031015, 255);
+        fill_ellipse(c, TX(9, -3), TY(9, -3), 2.2f, 2.2f, UI_WHITE, 255);
+        fill_ellipse(c, TX(9.7f, -3), TY(9.7f, -3), 1.1f, 1.1f, UI_INK, 255);
     }
 #undef TX
 #undef TY
@@ -267,7 +268,7 @@ static void draw_algae(ctx_t *c, const tank_t *t) {
                 float r = (1.5f + (float)((hb >> 10) % 3)) * (0.55f + 0.45f * cov / 255.0f)
                         + 2.2f * cov / 255.0f;
                 fill_ellipse(c, bx + ox, by + oy, r, r * 0.85f,
-                             (hb & 4) ? 0x3f7a45 : 0x35663d, 34 + cov * 96 / 255);
+                             (hb & 4) ? ALGAE_A : ALGAE_B, 34 + cov * 96 / 255);
             }
         }
 }
@@ -300,14 +301,44 @@ const uint16_t *render_scene_buf(unsigned *epoch) {
 }
 void render_fb_primed(const uint16_t *fb, unsigned epoch) { g_primed_fb = fb; g_primed_epoch = epoch; }
 
-/* vignette alpha at (x,y); matches the classic per-pixel loop */
+/* vignette alpha at (x,y). The tank's frame: a ROUNDED-RECTANGLE window with
+ * big elliptical corners (VIG_RX x VIG_RY) and a soft Gaussian falloff at
+ * the boundary - the exact mask the keeper pasted as the reference
+ * (2026-09-19): a strongly rounded square, smooth edge, solid dark outside.
+ * The window is centred, VIG_HW x VIG_HH half-sizes, falloff sigma VIG_SIG. */
+#define VIG_HW  176          /* window half-width, px */
+#define VIG_HH  139          /* window half-height, px */
+#define VIG_RX  64           /* corner arc semi-axis, x, px */
+#define VIG_RY  56           /* corner arc semi-axis, y, px */
+#define VIG_SIG 32.0f       /* falloff sigma, px (the soft edge band) */
+#define VIG_A   96          /* darkening outside the window (0-255) */
 static inline int vig_alpha(int x, int y) {
-    float dx = (x - TANK_W * 0.5f) / (TANK_W * 0.5f);
-    float dy = (y - TANK_H * 0.5f) / (TANK_H * 0.5f);
-    float d2 = dx * dx + dy * dy;
-    if (d2 <= 0.72f) return 0;
-    int a = (int)((d2 - 0.72f) * 220);
-    return a > 255 ? 255 : a;
+    /* SDF of the rounded-rect window (elliptical corners), normalised to
+       the corner ellipse: 0 inside, outside distance (px) beyond */
+    float qx = fabsf(x - TANK_W * 0.5f) - ((float)VIG_HW - (float)VIG_RX);
+    float qy = fabsf(y - TANK_H * 0.5f) - ((float)VIG_HH - (float)VIG_RY);
+    float nx = qx / (float)VIG_RX, ny = qy / (float)VIG_RY;
+    float ox = nx > 0 ? nx : 0.0f, oy = ny > 0 ? ny : 0.0f;
+    float inside = nx > ny ? (nx > 0 ? 0.0f : nx) : (ny > 0 ? 0.0f : ny);
+    float d = (sqrtf(ox * ox + oy * oy) + inside - 1.0f)
+            * (qx > qy ? (float)VIG_RX : (float)VIG_RY);
+    if (d <= 0) return 0;
+    int a = (int)((1.0f - expf(-(d * d) / (2.0f * VIG_SIG * VIG_SIG))) * (float)VIG_A);
+    return a > VIG_A ? VIG_A : a;
+}
+
+/* the sweep's ring span: rows past the window's edge are fully in the
+ * falloff (TANK_W/2); the corner-arc rows start where the arc leaves the
+ * row; the middle rows only at the side strips */
+static inline int vig_row_in(int y) {
+    float dy = fabsf(y - TANK_H * 0.5f);
+    if (dy > (float)VIG_HH) return TANK_W / 2;
+    if (dy >= (float)VIG_HH - (float)VIG_RY) {
+        float t = (dy - ((float)VIG_HH - (float)VIG_RY)) / (float)VIG_RY;
+        return (int)(TANK_W * 0.5f - ((float)VIG_HW - (float)VIG_RX)
+                     - (float)VIG_RX * sqrtf(1.0f - t * t));
+    }
+    return (int)(TANK_W * 0.5f - (float)VIG_HW);
 }
 
 /* pure darkening (blend toward black), independent of ctx dim */
@@ -341,11 +372,12 @@ static inline void span_final(ctx_t *c, int x0, int x1, int y, const src_t *s, i
 }
 
 /* water gradient colour of row y (shared by the scene bake and the frond
- * pre-tint below) */
+ * pre-tint below): bright cyan at the surface, deepening to azure at the
+ * floor (2026-09-22: vivid water, like the photo reference) */
 static inline uint32_t water_rgb(int y) {
     float p = (float)y / TANK_H;
-    return p < 0.45f ? mix(0x0a3c46, 0x08272f, p / 0.45f)
-                     : mix(0x08272f, 0x031015, (p - 0.45f) / 0.55f);
+    return p < 0.45f ? mix(WATER_TOP, WATER_MID, p / 0.45f)
+                     : mix(WATER_MID, WATER_DEEP, (p - 0.45f) / 0.55f);
 }
 
 /* Fronds are drawn OPAQUE from a per-row pre-tinted palette (2026-09-04):
@@ -359,7 +391,7 @@ static inline uint32_t water_rgb(int y) {
 static uint16_t g_veg_row[4][TANK_H];   /* grass pair, then the sword plant's yellow-green pair */
 static float    g_veg_row_dim = -1;
 static void veg_tint_fill(float dim) {
-    static const uint32_t frond[4] = { 0x3f8b55, 0x2e7d4f, 0x8dbb48, 0x6c9d38 };
+    static const uint32_t frond[4] = { FROND_A, FROND_B, FROND_C, FROND_D };
     if (g_veg_row_dim == dim) return;
     for (int y = 0; y < TANK_H; y++) {
         uint32_t w = water_rgb(y);
@@ -890,12 +922,9 @@ static int g_scene_castle_x = -2, g_scene_castle_z = -1;   /* what the baked sce
 
 static void draw_scene(const tank_t *t, uint16_t *fb, int stride, float dim) {
     ctx_t c = ctx_full(fb, stride, dim);
-    /* water gradient #0a3c46 → #08272f → #031015 */
+    /* water gradient (water_rgb: bright cyan surface -> deep azure floor) */
     for (int y = 0; y < TANK_H; y++) {
-        float p = (float)y / TANK_H;
-        uint32_t col = p < 0.45f ? mix(0x0a3c46, 0x08272f, p / 0.45f)
-                                 : mix(0x08272f, 0x031015, (p - 0.45f) / 0.55f);
-        uint16_t v = rgb565(col, dim);
+        uint16_t v = rgb565(water_rgb(y), dim);
         for (int x = 0; x < TANK_W; x++) fb[y * stride + x] = v;
     }
     /* pebbled bottom: irregular top edge, speckled stones in three tones.
@@ -906,19 +935,19 @@ static void draw_scene(const tank_t *t, uint16_t *fb, int stride, float dim) {
         for (int y = top; y < TANK_H; y++) {
             uint32_t h2 = (uint32_t)((x * 73856093u) ^ (y * 19349663u));
             uint32_t tone = (h2 >> 4) % 16;
-            uint32_t col = tone < 2 ? 0x2e3b2c : tone < 5 ? 0x22301f
-                         : tone < 8 ? 0x1a2418 : 0x101a12;
+            uint32_t col = tone < 2 ? PEBBLE_LT : tone < 5 ? PEBBLE_MD
+                         : tone < 8 ? PEBBLE_DK : PEBBLE_DARK;
             fb[y * stride + x] = rgb565(col, dim);
         }
     }
-    /* reef rock (the entity fish know); it widens as the tank earns milestones */
-    float grow = 1.0f + 0.06f * popcount32(t->tank_ms_bits);
-    fill_ellipse(&c, t->reef_x, TANK_H - 16, 34 * grow, 10 + 2 * (grow - 1) * 10, 0x123028, 255);
+    /* the reef rock is gone (2026-09-19: the keeper removed it - it read as
+       a green ellipse on the sand) */
     { int cx, z; bool placing; if (castle_state(t, &cx, &z, &placing)) draw_castle(&c, cx, 0, false); }   /* uncached: always drawn here */
 }
 
 
-/* The baked scene (scene cache mode). Water gradient x porthole vignette
+/* The baked scene (scene cache mode). Water gradient x rounded-square-frame
+ * vignette
  * computed in 8-bit and ORDERED-DITHERED to RGB565 (4x4 Bayer: at 322 ppi
  * the pattern is invisible, the 5/6-bit banding of a dark gradient and of
  * the vignette falloff is not - Strato saw it at the edges), then the floor
@@ -950,8 +979,8 @@ static void bake_scene(const tank_t *t, uint16_t *sc, float dim) {
         for (int y = top; y < TANK_H; y++) {
             uint32_t h2 = (uint32_t)((x * 73856093u) ^ (y * 19349663u));
             uint32_t tone = (h2 >> 4) % 16;
-            uint32_t col = tone < 2 ? 0x2e3b2c : tone < 5 ? 0x22301f
-                         : tone < 8 ? 0x1a2418 : 0x101a12;
+            uint32_t col = tone < 2 ? PEBBLE_LT : tone < 5 ? PEBBLE_MD
+                         : tone < 8 ? PEBBLE_DK : PEBBLE_DARK;
             int inv = 256 - (g_vig ? g_vig[y * TANK_W + x] : vig_alpha(x, y));
             int r = (int)(((col >> 16) & 255) * dim) * inv >> 8;
             int g = (int)(((col >> 8) & 255) * dim) * inv >> 8;
@@ -959,16 +988,8 @@ static void bake_scene(const tank_t *t, uint16_t *sc, float dim) {
             sc[y * TANK_W + x] = (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
         }
     }
-    /* reef rock (the entity fish know); widens as the tank earns milestones */
+    /* the reef rock is gone (2026-09-19: the keeper removed it) */
     ctx_t c = ctx_full(sc, TANK_W, dim);
-    src_t s = src_color(0x123028, dim);
-    float grow = 1.0f + 0.06f * popcount32(t->tank_ms_bits);
-    float rx = 34 * grow, ry = 10 + 2 * (grow - 1) * 10, cy = TANK_H - 16;
-    for (int y = (int)(cy - ry); y <= (int)(cy + ry); y++) {
-        float w = ell_half((y - cy) / ry);
-        if (w <= 0) continue;
-        span_final(&c, (int)(t->reef_x - rx * w), (int)(t->reef_x + rx * w), y, &s, 255);
-    }
     if (g_scene_castle_x >= 0) draw_castle(&c, g_scene_castle_x, 0, true);   /* the castle, unless it is being dragged */
 }
 
@@ -1023,25 +1044,25 @@ void render_tank(const tank_t *t, uint16_t *fb, int stride) {
        it (setup): three stones and a glint - dynamic, since it can move */
     {
         float ax = t->bubble_x, ay = TANK_H - 17;
-        fill_ellipse(&c, ax - 6, ay + 1, 7, 4, 0x2a3634, 255);
-        fill_ellipse(&c, ax + 5, ay + 2, 6, 3.5f, 0x22302c, 255);
-        fill_ellipse(&c, ax, ay - 2, 6, 3.5f, 0x3a4a48, 255);
-        fill_ellipse(&c, ax - 1, ay - 3, 2, 1.2f, 0x5a6a68, 200);
+        fill_ellipse(&c, ax - 6, ay + 1, 7, 4, STONE_A, 255);
+        fill_ellipse(&c, ax + 5, ay + 2, 6, 3.5f, STONE_B, 255);
+        fill_ellipse(&c, ax, ay - 2, 6, 3.5f, STONE_C, 255);
+        fill_ellipse(&c, ax - 1, ay - 3, 2, 1.2f, STONE_GLINT, 200);
         DYN_RECT((int)ax - 14, (int)ay - 7, (int)ax + 12, (int)ay + 7);
     }
     /* food pellets */
     for (int i = 0; i < MAX_FOOD; i++)
         if (t->food[i].alive) {
-            fill_ellipse(&c, t->food[i].x, t->food[i].y, 2.6f, 2.6f, 0xffbd59, 255);
-            fill_ellipse(&c, t->food[i].x - 0.8f, t->food[i].y - 0.8f, 1.0f, 1.0f, 0xffe9bd, 255);
+            fill_ellipse(&c, t->food[i].x, t->food[i].y, 2.6f, 2.6f, FOOD_PELLET, 255);
+            fill_ellipse(&c, t->food[i].x - 0.8f, t->food[i].y - 0.8f, 1.0f, 1.0f, FOOD_GLINT, 255);
             DYN_RECT((int)t->food[i].x - 5, (int)t->food[i].y - 5, (int)t->food[i].x + 5, (int)t->food[i].y + 5);
         }
     /* bubbles */
     for (int i = 0; i < MAX_BUBBLE; i++) {
         const bubble_t *b = &t->bubble[i];
         float r = b->column ? 2.6f : 1.8f;
-        fill_ellipse(&c, b->x, b->y, r, r, 0x9fd8e2, 60);
-        px_blend(&c, (int)(b->x - r * 0.4f), (int)(b->y - r * 0.4f), 0xffffff, 120);
+        fill_ellipse(&c, b->x, b->y, r, r, UI_EDGE, 60);
+        px_blend(&c, (int)(b->x - r * 0.4f), (int)(b->y - r * 0.4f), UI_WHITE, 120);
         DYN_RECT((int)b->x - 5, (int)b->y - 5, (int)b->x + 5, (int)b->y + 5);
     }
     PROF_ADD(3, p0);
@@ -1073,18 +1094,19 @@ void render_tank(const tank_t *t, uint16_t *fb, int stride) {
     for (int b = 0; b < tank_veg_beds(t); b++)          /* a FRONT-layer piece last: over the grass and the fish */
         if (bed_z(t, b) == DECOR_Z_FRONT) draw_veg(&c, t, b, veg_seed[b], -1, cached);
     PROF_ADD(4, p0);
-    /* porthole vignette: darken corners toward AMOLED black. With a scene
-       cache the full-frame pass is baked into the scene and only the dynamic
-       patches are re-darkened; without one, the classic per-pixel pass runs. */
+    /* rounded-square-frame vignette: darken the frame's edges, the corners
+       rounded (2026-09-22: a square falloff, not the circular porthole;
+       2026-09-19: the keeper asked for rounded corners). With a scene cache the
+       full-frame pass is baked into the scene and only the dynamic patches
+       are re-darkened; without one, the classic per-pixel pass runs. */
     if (cached) {
         /* one row sweep over the union of the dynamic rects: pixels marked
            in the dirty mask were drawn this frame (and not already vignetted
            inline) and get the vignette re-applied exactly once. */
         for (int y = 0; y < TANK_H; y++) {
-            float dyf = (y - TANK_H * 0.5f) / (TANK_H * 0.5f);
-            float rem = 0.72f - dyf * dyf;
-            int x_in = rem > 0 ? (int)(TANK_W * 0.5f * (1 - sqrtf(rem))) : TANK_W / 2;
-            if (x_in <= 0) continue;
+            /* ring row, as in vig_row_in: the dark pixels are within
+               VIG_FRAME of the left/right edges (x < x_in, x > TANK_W - x_in) */
+            int x_in = vig_row_in(y);
             short iv[sizeof rects / sizeof rects[0]][2]; int ni = 0;
             for (int i = 0; i < nr; i++)
                 if (y >= rects[i].y0 && y <= rects[i].y1) {
@@ -1117,18 +1139,14 @@ void render_tank(const tank_t *t, uint16_t *fb, int stride) {
         }
     } else {
         for (int y = 0; y < TANK_H; y++) {
-            float dy = (y - TANK_H * 0.5f) / (TANK_H * 0.5f);
-            float rem = 0.72f - dy * dy;
-            int x_in = rem > 0 ? (int)(TANK_W * 0.5f * (1 - sqrtf(rem))) : TANK_W / 2;
+            /* ring row, as in vig_row_in: the dark pixels are within VIG_FRAME
+               of the left/right edges */
+            int x_in = vig_row_in(y);
             for (int side = 0; side < 2; side++)
                 for (int k = 0; k < x_in; k++) {
                     int x = side ? TANK_W - 1 - k : k;
-                    float dx = (x - TANK_W * 0.5f) / (TANK_W * 0.5f);
-                    float d2 = dx * dx + dy * dy;
-                    if (d2 > 0.72f) {
-                        int a = (int)((d2 - 0.72f) * 220);
-                        if (a > 0) px_blend(&c, x, y, 0x000000, a > 255 ? 255 : a);
-                    }
+                    int a = vig_alpha(x, y);
+                    if (a) px_blend(&c, x, y, 0x000000, a);
                 }
         }
     }
@@ -1182,7 +1200,7 @@ static void meter(ctx_t *c, int x, int y, int segs, int sw, float frac, uint32_t
     if (frac < 0) frac = 0;
     if (frac > 1) frac = 1;
     float per = 1.0f / segs;
-    src_t on = src_color(rgb, c->dim), off = src_color(0x2a3f45, c->dim);
+    src_t on = src_color(rgb, c->dim), off = src_color(UI_DIM, c->dim);
     for (int s = 0; s < segs; s++) {
         int sx = x + s * (sw + 2);
         float have = (frac - s * per) / per;                   /* 0..1 of this segment */
@@ -1204,12 +1222,12 @@ static void slider(ctx_t *c, int x, int y, int w, float frac, uint32_t rgb,
     int lx = x + 20, lw = w - 40, ly = y + 8;                  /* the line between poles */
     for (int xx = 0; xx < lw; xx++)
         if (revealed || (xx & 4))
-            for (int yy = -1; yy <= 0; yy++) px_blend(c, lx + xx, ly + yy, 0x2a3f45, revealed ? 200 : 110);
+            for (int yy = -1; yy <= 0; yy++) px_blend(c, lx + xx, ly + yy, UI_DIM, revealed ? 200 : 110);
     if (revealed) {
         if (frac < 0) frac = 0;
         if (frac > 1) frac = 1;
         fill_ellipse(c, lx + lw * frac, ly - 0.5f, 3.4f, 3.4f, rgb, 255);
-        fill_ellipse(c, lx + lw * frac - 1, ly - 1.5f, 1.0f, 1.0f, 0xffffff, 200);
+        fill_ellipse(c, lx + lw * frac - 1, ly - 1.5f, 1.0f, 1.0f, UI_WHITE, 200);
     } else
         blit_icon(c, lx + lw / 2 - 8, y, &icon_unknown_16, 220);
 }
@@ -1225,7 +1243,7 @@ static void card_draw(ctx_t c, const tank_t *t, int fish_idx) {
     const int X = RENDER_CARD_X, Y = RENDER_CARD_Y, W = RENDER_CARD_W, H = RENDER_CARD_H; /* x clear of the curved bezel */
     /* backdrop: 28k blended pixels - hoisted (this alone was most of the
      * card's ~12 ms/frame on the device through per-pixel px_blend) */
-    src_t bg = src_color(0x04141a, 1.0f);
+    src_t bg = src_color(UI_PANEL, 1.0f);
     for (int y = Y; y < Y + H; y++) span(&c, X, X + W - 1, y, &bg, 215);
     for (int x = X; x < X + W; x++) { px(&c, x, Y, rgb565(f->color, 1)); px(&c, x, Y + H - 1, rgb565(f->color, 1)); }
     for (int y = Y; y < Y + H; y++) { px(&c, X, y, rgb565(f->color, 1)); px(&c, X + W - 1, y, rgb565(f->color, 1)); }
@@ -1233,12 +1251,12 @@ static void card_draw(ctx_t c, const tank_t *t, int fish_idx) {
     /* identity row: swatch, stage pips (earned ones lit), certainty dot -
      * bright = the model was sure of its last decision, dim = torn */
     fill_ellipse(&c, X + 14, Y + 14, 6, 6, f->color, 255);
-    fill_ellipse(&c, X + 11, Y + 11, 1.6f, 1.6f, 0xffffff, 150);
+    fill_ellipse(&c, X + 11, Y + 11, 1.6f, 1.6f, UI_WHITE, 150);
     for (int i = 0; i < 4; i++) {
         if (i <= (int)f->stage) fill_ellipse(&c, X + 30 + i * 10, Y + 14, 2.8f, 2.8f, f->accent, 255);
-        else ring(&c, X + 30 + i * 10, Y + 14, 2.8f, 0x2a3f45);
+        else ring(&c, X + 30 + i * 10, Y + 14, 2.8f, UI_DIM);
     }
-    fill_ellipse(&c, X + W - 14, Y + 14, 3.2f, 3.2f, 0xffffff, (int)(40 + 200 * f->goal.confidence));
+    fill_ellipse(&c, X + W - 14, Y + 14, 3.2f, 3.2f, UI_WHITE, (int)(40 + 200 * f->goal.confidence));
     /* growth: a thin bar under the pips filling toward the next stage (tended
      * time only - fish grow while the tank is lit and lived-in). Elders are
      * done growing, so no bar. */
@@ -1251,7 +1269,7 @@ static void card_draw(ctx_t c, const tank_t *t, int fish_idx) {
         const int gx = X + 27, gw = 37;                        /* spans the pip row */
         for (int xx = 0; xx < gw; xx++)
             for (int yy = 0; yy < 2; yy++)
-                px_blend(&c, gx + xx, Y + 21 + yy, xx < (int)(gw * frac + 0.5f) ? f->accent : 0x2a3f45,
+                px_blend(&c, gx + xx, Y + 21 + yy, xx < (int)(gw * frac + 0.5f) ? f->accent : UI_DIM,
                          xx < (int)(gw * frac + 0.5f) ? 235 : 150);
     }
 
@@ -1259,10 +1277,10 @@ static void card_draw(ctx_t c, const tank_t *t, int fish_idx) {
      * a full meter, and it drains as the fish gets hungry (a food icon next
      * to a growing bar read backwards) */
     struct { const icon_t *ic; float v; uint32_t rgb; } needs[4] = {
-        { &icon_hunger, 10.0f - f->hunger, 0xffbd59 },
-        { &icon_energy, f->energy,         0x78d67d },
-        { &icon_stress, f->stress,         0xf25b65 },
-        { &icon_trust,  f->trust,          0xffd166 },
+        { &icon_hunger, 10.0f - f->hunger, FISH_ACCENT_AMBER },
+        { &icon_energy, f->energy,         FISH_GREEN },
+        { &icon_stress, f->stress,         FISH_ACCENT_RED },
+        { &icon_trust,  f->trust,          FISH_YELLOW },
     };
     for (int i = 0; i < 4; i++) {
         int ry = Y + 30 + i * 27;
@@ -1271,23 +1289,23 @@ static void card_draw(ctx_t c, const tank_t *t, int fish_idx) {
     }
 
     /* divider between the zones */
-    for (int x = X + 8; x < X + W - 8; x++) px_blend(&c, x, Y + 142, 0x2a3f45, 200);
+    for (int x = X + 8; x < X + W - 8; x++) px_blend(&c, x, Y + 142, UI_DIM, 200);
 
     /* who they are: spectrum sliders, revealed by behaviour you have seen
        this fish do (docs/progression.md habits) */
     bool saw_bold = f->ms_bits & MS_FIRST_DART;
     bool saw_social = f->ms_bits & MS_FIRST_FOLLOW;
     bool saw_curious = f->ms_bits & (MS_FIRST_REEF | MS_FIRST_BUBBLES);
-    slider(&c, X + 8, Y + 152, W - 16, f->bold,             0xffffff, &icon_shy,      &icon_bold,    saw_bold);
-    slider(&c, X + 8, Y + 178, W - 16, f->sociable,         0x38dcc7, &icon_solo,     &icon_social,  saw_social);
-    slider(&c, X + 8, Y + 204, W - 16, f->curiosity / 10.0f, 0x6db9ff, &icon_cautious, &icon_curious, saw_curious);
+    slider(&c, X + 8, Y + 152, W - 16, f->bold,             UI_WHITE, &icon_shy,      &icon_bold,    saw_bold);
+    slider(&c, X + 8, Y + 178, W - 16, f->sociable,         FISH_TEAL, &icon_solo,     &icon_social,  saw_social);
+    slider(&c, X + 8, Y + 204, W - 16, f->curiosity / 10.0f, FISH_BLUE, &icon_cautious, &icon_curious, saw_curious);
 
     /* the way onward (2026-09-16): a MORE button in the pages' dress at the
        foot of the card. The whole card was already the tap that opens the
        milestones page (and from there SETTINGS / UPGRADES), but nothing said
        so - a keeper asked Strato how to get there. The button is the sign;
        the hit box is still the card (touch ports, RENDER_CARD_H). */
-    button(&c, X + 8, Y + H - 8 - CARD_MORE_H, W - 16, CARD_MORE_H, 0x1c2f36, 0x9fd8e2, "MORE", 2);
+    button(&c, X + 8, Y + H - 8 - CARD_MORE_H, W - 16, CARD_MORE_H, UI_INNER, UI_EDGE, "MORE", 2);
 }
 
 /* ---- stats card cache (2026-09-01) ----
@@ -1313,20 +1331,20 @@ static void draw_text(ctx_t *c, int x, int y, int scale, uint32_t rgb, const cha
 static void rect_edge(ctx_t *c, int x, int y, int w, int h, uint32_t rgb);
 static void blit_icon_scaled(ctx_t *c, int x, int y, const icon_t *ic, int s, bool lit);
 static void snail_card_draw(ctx_t *c, const tank_t *t) {
-    ring(c, t->snail_x, t->snail_y, 20, 0x9fd8e2);
+    ring(c, t->snail_x, t->snail_y, 20, UI_EDGE);
     const int W = SNAIL_CARD_W, H = SNAIL_CARD_H, X = (TANK_W - W) / 2, Y = (TANK_H - H) / 2;
-    src_t bg = src_color(0x04141a, 1.0f);
+    src_t bg = src_color(UI_PANEL, 1.0f);
     for (int y = Y; y < Y + H; y++) span(c, X, X + W - 1, y, &bg, 235);
-    rect_edge(c, X, Y, W, H, 0x9fd8e2); rect_edge(c, X + 1, Y + 1, W - 2, H - 2, 0x1c2f36);
+    rect_edge(c, X, Y, W, H, UI_EDGE); rect_edge(c, X + 1, Y + 1, W - 2, H - 2, UI_INNER);
     const icon_t *ic = &icon_snail_upright;
     blit_icon_scaled(c, X + (W - ic->w * 2) / 2, Y + 10, ic, 2, true);
-    draw_text(c, X + (W - text_w("SNAIL", 3)) / 2, Y + 82, 3, 0xffffff, "SNAIL");
+    draw_text(c, X + (W - text_w("SNAIL", 3)) / 2, Y + 82, 3, UI_WHITE, "SNAIL");
     const char *cap = "ALGAE GRAZED SO FAR";
-    draw_text(c, X + (W - text_w(cap, 2)) / 2, Y + 112, 2, 0x9fd8e2, cap);
+    draw_text(c, X + (W - text_w(cap, 2)) / 2, Y + 112, 2, UI_EDGE, cap);
     char n[24];
     if (t->snail_grazed <= 0) snprintf(n, sizeof n, "NOTHING YET");
     else snprintf(n, sizeof n, "%d SPOT%s", (int)t->snail_grazed, t->snail_grazed == 1 ? "" : "S");
-    draw_text(c, X + (W - text_w(n, 3)) / 2, Y + 134, 3, 0xffffff, n);
+    draw_text(c, X + (W - text_w(n, 3)) / 2, Y + 134, 3, UI_WHITE, n);
 }
 
 void render_stats_card(const tank_t *t, int fish_idx, uint16_t *fb, int stride) {
@@ -1466,7 +1484,7 @@ static void rect_edge(ctx_t *c, int x, int y, int w, int h, uint32_t rgb) {
 static void button(ctx_t *c, int x, int y, int W, int H, uint32_t fill, uint32_t edge, const char *label, int scale) {
     rect_fill(c, x, y, W, H, fill);
     rect_edge(c, x, y, W, H, edge); rect_edge(c, x + 1, y + 1, W - 2, H - 2, edge);
-    draw_text(c, x + (W - text_w(label, scale)) / 2, y + (H - 7 * scale) / 2, scale, 0xffffff, label);
+    draw_text(c, x + (W - text_w(label, scale)) / 2, y + (H - 7 * scale) / 2, scale, UI_WHITE, label);
 }
 /* the same primitives for panels built elsewhere (render.h) */
 int  render_text_w(const char *s, int scale) { return text_w(s, scale); }
@@ -1511,23 +1529,23 @@ void render_fish_portrait(uint16_t *fb, int stride, float x, float y, float size
 void render_confirm_reset(uint16_t *fb, int stride, float frac) {
     ctx_t c = ctx_full(fb, stride, 1.0f);              /* ignores night dimming, like the card */
     const int X = RENDER_CONFIRM_X, Y = RENDER_CONFIRM_Y, W = RENDER_CONFIRM_W, H = RENDER_CONFIRM_H;
-    rect_fill(&c, X, Y, W, H, 0x04141a);
-    rect_edge(&c, X, Y, W, H, 0x9fd8e2); rect_edge(&c, X + 1, Y + 1, W - 2, H - 2, 0x1c2f36);
+    rect_fill(&c, X, Y, W, H, UI_PANEL);
+    rect_edge(&c, X, Y, W, H, UI_EDGE); rect_edge(&c, X + 1, Y + 1, W - 2, H - 2, UI_INNER);
     const char *title = "RESET TANK?";
-    draw_text(&c, X + (W - text_w(title, 3)) / 2, Y + 20, 3, 0xffffff, title);
+    draw_text(&c, X + (W - text_w(title, 3)) / 2, Y + 20, 3, UI_WHITE, title);
     const char *l1 = "START OVER WITH TWO FRY", *l2 = "EVERYTHING ELSE IS LOST";
-    draw_text(&c, X + (W - text_w(l1, 2)) / 2, Y + 58, 2, 0x9fd8e2, l1);
-    draw_text(&c, X + (W - text_w(l2, 2)) / 2, Y + 78, 2, 0x9fd8e2, l2);
+    draw_text(&c, X + (W - text_w(l1, 2)) / 2, Y + 58, 2, UI_EDGE, l1);
+    draw_text(&c, X + (W - text_w(l2, 2)) / 2, Y + 78, 2, UI_EDGE, l2);
     /* NO is the calm one; YES wears the stress red */
-    button(&c, RENDER_CONFIRM_NO_X,  RENDER_CONFIRM_BTN_Y, RENDER_CONFIRM_BTN_W, RENDER_CONFIRM_BTN_H, 0x1c2f36, 0x9fd8e2, "NO", 3);
-    button(&c, RENDER_CONFIRM_YES_X, RENDER_CONFIRM_BTN_Y, RENDER_CONFIRM_BTN_W, RENDER_CONFIRM_BTN_H, 0x7a2028, 0xf25b65, "YES", 3);
+    button(&c, RENDER_CONFIRM_NO_X,  RENDER_CONFIRM_BTN_Y, RENDER_CONFIRM_BTN_W, RENDER_CONFIRM_BTN_H, UI_INNER, UI_EDGE, "NO", 3);
+    button(&c, RENDER_CONFIRM_YES_X, RENDER_CONFIRM_BTN_Y, RENDER_CONFIRM_BTN_W, RENDER_CONFIRM_BTN_H, UI_DANGER, FISH_ACCENT_RED, "YES", 3);
     /* the prompt lets itself go: a bar draining toward the timeout */
     if (frac < 0) frac = 0;
     if (frac > 1) frac = 1;
     const int bw = W - 48, bx = X + 24, by = Y + H - 16;
-    rect_fill(&c, bx, by, bw, 3, 0x2a3f45);
+    rect_fill(&c, bx, by, bw, 3, UI_DIM);
     int fw = (int)(bw * frac + 0.5f);
-    if (fw > 0) rect_fill(&c, bx, by, fw, 3, 0x9fd8e2);
+    if (fw > 0) rect_fill(&c, bx, by, fw, 3, UI_EDGE);
 }
 int render_confirm_hit(float x, float y) {
     const int m = 10;                                   /* a fingertip's slop around each button */
@@ -1565,9 +1583,9 @@ int render_confirm_hit(float x, float y) {
 #define MSP_MODAL_Y   100
 #define MSP_MODAL_W   336
 #define MSP_MODAL_H   156
-#define MSP_INK       0x031015
-#define MSP_DIM       0x2a3f45
-#define MSP_TEAL      0x9fd8e2
+#define MSP_INK       UI_INK
+#define MSP_DIM       UI_DIM
+#define MSP_TEAL      UI_EDGE
 
 typedef struct { uint32_t bit; const icon_t *icon; } badge_t;
 static const badge_t FISH_BADGES[6] = {
@@ -1659,7 +1677,7 @@ static void badge(ctx_t *c, int x, int y, const icon_t *ic, bool on, bool fresh)
     if (on) blit_icon(c, x, y, ic, 255); else blit_icon_locked(c, x, y, ic);
     if (on && fresh) {
         rect_edge(c, x - 3, y - 3, MSP_ICON + 6, MSP_ICON + 6, MSP_TEAL);
-        rect_edge(c, x - 4, y - 4, MSP_ICON + 8, MSP_ICON + 8, 0x3f6a72);
+        rect_edge(c, x - 4, y - 4, MSP_ICON + 8, MSP_ICON + 8, UI_CAPTION);
     }
 }
 static int bit_index(uint32_t bit) { int i = 0; while (bit > 1u) { bit >>= 1; i++; } return i; }
@@ -1728,7 +1746,7 @@ void render_milestones(const tank_t *t, uint16_t *fb, int stride) {
         const fish_t *f = &t->fish[i];
         int top = MSP_ROW_Y0 + i * MSP_ROW_H;
         render_fish_preview(fb, stride, 52, top + 20, f->size, f->color, f->fin, f->accent, t->clock);
-        draw_text(&c, 92, top + 2, 2, 0xffffff, f->name);
+        draw_text(&c, 92, top + 2, 2, UI_WHITE, f->name);
         static const int GX[4] = { 96, 111, 129, 151 };   /* each glyph's own pitch: a 4 px gap as they grow */
         for (int s = 0; s < 4; s++)          /* growth strip: fry -> elder, lit up to the stage reached */
             fish_glyph(&c, GX[s], top + 30, 2.2f + s * 0.9f, s <= (int)f->stage ? f->accent : MSP_DIM);
@@ -1768,7 +1786,7 @@ void render_milestones(const tank_t *t, uint16_t *fb, int stride) {
     {   /* the balance under the coin (Strato, 2026-09-15), centred on it - the
            only room: the divider and the last row sit above, 12 px to the left */
         char bal[16]; snprintf(bal, sizeof bal, "%d", (int)t->sd_balance);
-        draw_text(&c, MSP_SD_X + (MSP_ICON - text_w(bal, 2)) / 2, MSP_TANK_Y + 34, 2, 0xffffff, bal);
+        draw_text(&c, MSP_SD_X + (MSP_ICON - text_w(bal, 2)) / 2, MSP_TANK_Y + 34, 2, UI_WHITE, bal);
     }
     draw_text(&c, 92, MSP_TANK_Y + 2, 2, MSP_TEAL, "TANK");
     for (int k = 0; k < POP_CAP; k++)        /* population strip: who is here, who could still arrive */
@@ -1780,9 +1798,9 @@ void render_milestones(const tank_t *t, uint16_t *fb, int stride) {
     }
     /* the way out: a CLOSE button in the prompt's calm dress (a tap anywhere
        else never drops the page - too much to tap for that) */
-    button(&c, MSP_CLOSE_X, MSP_CLOSE_Y, MSP_CLOSE_W, MSP_CLOSE_H, 0x1c2f36, MSP_TEAL, "CLOSE", 2);
-    button(&c, MSP_SET_X, MSP_CLOSE_Y, MSP_SET_W, MSP_CLOSE_H, 0x1c2f36, MSP_TEAL, "SETTINGS", 2);   /* bottom left (2026-09-15) */
-    button(&c, MSP_UPG_X, MSP_CLOSE_Y, MSP_UPG_W, MSP_CLOSE_H, 0x1c2f36, MSP_TEAL, "UPGRADES", 2);   /* the shop, between them */
+    button(&c, MSP_CLOSE_X, MSP_CLOSE_Y, MSP_CLOSE_W, MSP_CLOSE_H, UI_INNER, MSP_TEAL, "CLOSE", 2);
+    button(&c, MSP_SET_X, MSP_CLOSE_Y, MSP_SET_W, MSP_CLOSE_H, UI_INNER, MSP_TEAL, "SETTINGS", 2);   /* bottom left (2026-09-15) */
+    button(&c, MSP_UPG_X, MSP_CLOSE_Y, MSP_UPG_W, MSP_CLOSE_H, UI_INNER, MSP_TEAL, "UPGRADES", 2);   /* the shop, between them */
     /* a modal up: the page under it is out of reach (any tap only closes the
        modal), so it LOOKS out of reach - every pixel at half (Strato: with
        CLOSE lit it looked like you could still tap it). One shift per
@@ -1798,20 +1816,20 @@ void render_milestones(const tank_t *t, uint16_t *fb, int stride) {
         const char *const *tip = progression_fry_tip(g_ms_kind);
         int n = 0; while (tip[n]) n++;
         const int H = 56 + n * 20 + 16;
-        rect_fill(&c, X, Y, W, H, 0x04141a);
-        rect_edge(&c, X, Y, W, H, MSP_TEAL); rect_edge(&c, X + 1, Y + 1, W - 2, H - 2, 0x1c2f36);
+        rect_fill(&c, X, Y, W, H, UI_PANEL);
+        rect_edge(&c, X, Y, W, H, MSP_TEAL); rect_edge(&c, X + 1, Y + 1, W - 2, H - 2, UI_INNER);
         char title[24]; snprintf(title, sizeof title, "%s: HOW", g_ms_title);
-        draw_text(&c, X + (W - text_w(title, 3)) / 2, Y + 16, 3, 0xffffff, title);
+        draw_text(&c, X + (W - text_w(title, 3)) / 2, Y + 16, 3, UI_WHITE, title);
         for (int i = 0; i < n; i++) draw_text(&c, X + (W - text_w(tip[i], 2)) / 2, Y + 56 + i * 20, 2, MSP_TEAL, tip[i]);
     } else if (g_ms_caption[0]) {
         const int X = MSP_MODAL_X, W = MSP_MODAL_W;
         const int Y = g_ms_kind >= 0 ? MSP_FRY_MODAL_Y : MSP_MODAL_Y;
         const int H = MSP_MODAL_H + (g_ms_caption2[0] ? 20 : 0) + (g_ms_sub[0] ? 24 : 0) + (g_ms_kind >= 0 ? MSP_HOW_H + 14 : 0);
-        rect_fill(&c, X, Y, W, H, 0x04141a);
-        rect_edge(&c, X, Y, W, H, MSP_TEAL); rect_edge(&c, X + 1, Y + 1, W - 2, H - 2, 0x1c2f36);
+        rect_fill(&c, X, Y, W, H, UI_PANEL);
+        rect_edge(&c, X, Y, W, H, MSP_TEAL); rect_edge(&c, X + 1, Y + 1, W - 2, H - 2, UI_INNER);
         if (g_ms_kind >= 0)                        /* the way further in: HOW?, centred at the foot (Strato: bottom
                                                       right sat too close to CLOSE for comfort) */
-            button(&c, X + (W - MSP_HOW_W) / 2, Y + H - 10 - MSP_HOW_H, MSP_HOW_W, MSP_HOW_H, 0x1c2f36, MSP_TEAL, "HOW?", 2);
+            button(&c, X + (W - MSP_HOW_W) / 2, Y + H - 10 - MSP_HOW_H, MSP_HOW_W, MSP_HOW_H, UI_INNER, MSP_TEAL, "HOW?", 2);
         if (g_ms_icon) blit_icon_scaled(&c, X + (W - g_ms_icon->w * 2) / 2, Y + 16 + (32 - g_ms_icon->w), g_ms_icon, 2, g_ms_lit);
         else if (g_ms_fish >= 0 && g_ms_fish < t->n_fish) {
             const fish_t *f = &t->fish[g_ms_fish];
@@ -1819,22 +1837,22 @@ void render_milestones(const tank_t *t, uint16_t *fb, int stride) {
             else          render_fish_preview(fb, stride, X + W / 2, Y + 48, f->size * 1.6f, MSP_DIM, MSP_DIM, MSP_DIM, t->clock);
         } else if (g_ms_fry)
             render_fish_preview(fb, stride, X + W / 2, Y + 48, 0.9f, g_ms_lit ? MSP_TEAL : MSP_DIM, g_ms_lit ? MSP_TEAL : MSP_DIM, g_ms_lit ? MSP_TEAL : MSP_DIM, t->clock);
-        draw_text(&c, X + (W - text_w(g_ms_title, 3)) / 2, Y + 92, 3, g_ms_lit ? 0xffffff : MSP_TEAL, g_ms_title);
-        draw_text(&c, X + (W - text_w(g_ms_caption, 2)) / 2, Y + 124, 2, g_ms_lit ? MSP_TEAL : 0x5f8a92, g_ms_caption);
+        draw_text(&c, X + (W - text_w(g_ms_title, 3)) / 2, Y + 92, 3, g_ms_lit ? UI_WHITE : MSP_TEAL, g_ms_title);
+        draw_text(&c, X + (W - text_w(g_ms_caption, 2)) / 2, Y + 124, 2, g_ms_lit ? MSP_TEAL : UI_FILL, g_ms_caption);
         int ly = Y + 144;
-        if (g_ms_caption2[0]) { draw_text(&c, X + (W - text_w(g_ms_caption2, 2)) / 2, ly, 2, g_ms_lit ? MSP_TEAL : 0x5f8a92, g_ms_caption2); ly += 20; }
-        if (g_ms_sub[0]) draw_text(&c, X + (W - text_w(g_ms_sub, 2)) / 2, ly + 4, 2, g_ms_lit ? 0xffffff : MSP_TEAL, g_ms_sub);
+        if (g_ms_caption2[0]) { draw_text(&c, X + (W - text_w(g_ms_caption2, 2)) / 2, ly, 2, g_ms_lit ? MSP_TEAL : UI_FILL, g_ms_caption2); ly += 20; }
+        if (g_ms_sub[0]) draw_text(&c, X + (W - text_w(g_ms_sub, 2)) / 2, ly + 4, 2, g_ms_lit ? UI_WHITE : MSP_TEAL, g_ms_sub);
         {   /* the arrows (2026-09-16): the previous / next of the group at the
                top corners, in the buttons' dress, only when there is a group */
             int idx, n = ms_group(t, nreq, &idx);
             if (n > 1) {
                 int ax = X + MSP_ARROW_IN, ay = Y + MSP_ARROW_IN, bx = X + W - MSP_ARROW_IN - MSP_ARROW_W;
-                rect_fill(&c, ax, ay, MSP_ARROW_W, MSP_ARROW_H, 0x1c2f36);
+                rect_fill(&c, ax, ay, MSP_ARROW_W, MSP_ARROW_H, UI_INNER);
                 rect_edge(&c, ax, ay, MSP_ARROW_W, MSP_ARROW_H, MSP_TEAL); rect_edge(&c, ax + 1, ay + 1, MSP_ARROW_W - 2, MSP_ARROW_H - 2, MSP_TEAL);
-                ms_chevron(&c, ax + 14, ay + MSP_ARROW_H / 2, true, 0xffffff);
-                rect_fill(&c, bx, ay, MSP_ARROW_W, MSP_ARROW_H, 0x1c2f36);
+                ms_chevron(&c, ax + 14, ay + MSP_ARROW_H / 2, true, UI_WHITE);
+                rect_fill(&c, bx, ay, MSP_ARROW_W, MSP_ARROW_H, UI_INNER);
                 rect_edge(&c, bx, ay, MSP_ARROW_W, MSP_ARROW_H, MSP_TEAL); rect_edge(&c, bx + 1, ay + 1, MSP_ARROW_W - 2, MSP_ARROW_H - 2, MSP_TEAL);
-                ms_chevron(&c, bx + MSP_ARROW_W - 14, ay + MSP_ARROW_H / 2, false, 0xffffff);
+                ms_chevron(&c, bx + MSP_ARROW_W - 14, ay + MSP_ARROW_H / 2, false, UI_WHITE);
             }
         }
     }
@@ -1944,8 +1962,8 @@ void render_milestones_leave(void) { g_ms_kind = -1; g_ms_tip = false; g_ms_capt
 void render_notice(const tank_t *t, uint16_t *fb, int stride, int kind, int fish, uint32_t bit, float frac_left) {
     ctx_t c = ctx_full(fb, stride, 1.0f);
     const int X = MSP_MODAL_X, W = MSP_MODAL_W, Y = MSP_MODAL_Y, H = MSP_MODAL_H;
-    rect_fill(&c, X, Y, W, H, 0x04141a);
-    rect_edge(&c, X, Y, W, H, MSP_TEAL); rect_edge(&c, X + 1, Y + 1, W - 2, H - 2, 0x1c2f36);
+    rect_fill(&c, X, Y, W, H, UI_PANEL);
+    rect_edge(&c, X, Y, W, H, MSP_TEAL); rect_edge(&c, X + 1, Y + 1, W - 2, H - 2, UI_INNER);
     char title[FISH_NAME_MAX + 8] = "THE TANK", caption[40] = "";
     const icon_t *ic = NULL;
     const fish_t *f = fish >= 0 && fish < t->n_fish ? &t->fish[fish] : NULL;
@@ -1969,11 +1987,11 @@ void render_notice(const tank_t *t, uint16_t *fb, int stride, int kind, int fish
         if (!ic && f) render_fish_preview(fb, stride, X + W / 2, Y + 48, f->size * 1.6f, f->color, f->fin, f->accent, t->clock);
     }
     if (ic) blit_icon_scaled(&c, X + (W - ic->w * 2) / 2, Y + 16 + (32 - ic->w), ic, 2, true);
-    draw_text(&c, X + (W - text_w(title, 3)) / 2, Y + 92, 3, 0xffffff, title);
+    draw_text(&c, X + (W - text_w(title, 3)) / 2, Y + 92, 3, UI_WHITE, title);
     draw_text(&c, X + (W - text_w(caption, 2)) / 2, Y + 124, 2, MSP_TEAL, caption);
     if (frac_left < 0) frac_left = 0;
     if (frac_left > 1) frac_left = 1;
-    rect_fill(&c, X + 2, Y + H - 4, (int)((W - 4) * frac_left), 2, 0x1c2f36);
+    rect_fill(&c, X + 2, Y + H - 4, (int)((W - 4) * frac_left), 2, UI_INNER);
 }
 
 /* ---- the shop (2026-09-15): sand dollars, and what they buy ----
@@ -2015,62 +2033,62 @@ void render_shop(const tank_t *t, uint16_t *fb, int stride) {
     blit_icon(&c, SHP_COIN_X, SHP_COIN_Y, &icon_shop_sand_dollar_64, 255);
     draw_text(&c, 112, SHP_COIN_Y + 6, 2, MSP_TEAL, "SAND DOLLARS");
     char bal[16]; snprintf(bal, sizeof bal, "%d", (int)t->sd_balance);
-    draw_text(&c, 112, SHP_COIN_Y + 28, 4, 0xffffff, bal);
+    draw_text(&c, 112, SHP_COIN_Y + 28, 4, UI_WHITE, bal);
     for (int x = 24; x < TANK_W - 24; x++) px_blend(&c, x, SHP_ROW_Y0 - 10, MSP_DIM, 200);
     for (int i = 0; i < SD_ITEM_COUNT; i++) {
         const sd_item_t *it = &SD_ITEMS[i];
         int top = SHP_ROW_Y0 + i * SHP_ROW_DY;
         bool owned = (t->sd_unlocks & it->bit) != 0, can = t->sd_balance >= it->price;
         if (owned) blit_icon(&c, SHP_COIN_X, top, shop_icon(i), 255); else blit_icon_locked(&c, SHP_COIN_X, top, shop_icon(i));
-        draw_text(&c, 76, top + 2, 2, 0xffffff, it->name);
+        draw_text(&c, 76, top + 2, 2, UI_WHITE, it->name);
         if (owned) draw_text(&c, 76, top + 20, 2, MSP_TEAL, "IN THE TANK");
         else price_tag(&c, 76, top + 20, it->price, can ? MSP_TEAL : MSP_DIM);
         if (owned)     button(&c, SHP_BTN_X, top, SHP_BTN_W, SHP_BTN_H, MSP_INK, MSP_DIM, "IN TANK", 2);
         else if (can) { button(&c, SHP_BTN_X, top, SHP_BTN_W, SHP_BTN_H, MSP_TEAL, MSP_TEAL, "UNLOCK", 2);
                         draw_text(&c, SHP_BTN_X + (SHP_BTN_W - text_w("UNLOCK", 2)) / 2, top + (SHP_BTN_H - 14) / 2, 2, MSP_INK, "UNLOCK"); }
-        else           button(&c, SHP_BTN_X, top, SHP_BTN_W, SHP_BTN_H, 0x1c2f36, MSP_DIM, "UNLOCK", 2);
+        else           button(&c, SHP_BTN_X, top, SHP_BTN_W, SHP_BTN_H, UI_INNER, MSP_DIM, "UNLOCK", 2);
     }
-    draw_text(&c, (TANK_W - text_w("EARN THEM BY CARING FOR", 2)) / 2, SHP_ROW_Y0 + (SD_ITEM_COUNT - 1) * SHP_ROW_DY + SHP_BTN_H + 12, 2, 0x3f6a72, "EARN THEM BY CARING FOR");
-    draw_text(&c, (TANK_W - text_w("THE TANK AND THE FISH", 2)) / 2, SHP_ROW_Y0 + (SD_ITEM_COUNT - 1) * SHP_ROW_DY + SHP_BTN_H + 32, 2, 0x3f6a72, "THE TANK AND THE FISH");
-    button(&c, SHP_EARN_X, MSP_CLOSE_Y, SHP_EARN_W, MSP_CLOSE_H, 0x1c2f36, MSP_TEAL, "HOW TO EARN", 2);
-    button(&c, MSP_CLOSE_X, MSP_CLOSE_Y, MSP_CLOSE_W, MSP_CLOSE_H, 0x1c2f36, MSP_TEAL, "CLOSE", 2);
+    draw_text(&c, (TANK_W - text_w("EARN THEM BY CARING FOR", 2)) / 2, SHP_ROW_Y0 + (SD_ITEM_COUNT - 1) * SHP_ROW_DY + SHP_BTN_H + 12, 2, UI_CAPTION, "EARN THEM BY CARING FOR");
+    draw_text(&c, (TANK_W - text_w("THE TANK AND THE FISH", 2)) / 2, SHP_ROW_Y0 + (SD_ITEM_COUNT - 1) * SHP_ROW_DY + SHP_BTN_H + 32, 2, UI_CAPTION, "THE TANK AND THE FISH");
+    button(&c, SHP_EARN_X, MSP_CLOSE_Y, SHP_EARN_W, MSP_CLOSE_H, UI_INNER, MSP_TEAL, "HOW TO EARN", 2);
+    button(&c, MSP_CLOSE_X, MSP_CLOSE_Y, MSP_CLOSE_W, MSP_CLOSE_H, UI_INNER, MSP_TEAL, "CLOSE", 2);
     if (g_shp_modal < 0 && !g_shp_earn) return;
     for (int y = 0; y < TANK_H; y++)                          /* the page out of reach under a modal */
         for (int x = 0; x < TANK_W; x++) fb[y * stride + x] = (uint16_t)((fb[y * stride + x] >> 1) & 0x7bef);
     const int X = SHP_MODAL_X, W = SHP_MODAL_W;
     if (g_shp_earn) {
         const int Y = SHP_EARN_MODAL_Y, H = SHP_EARN_MODAL_H;
-        rect_fill(&c, X, Y, W, H, 0x04141a);
-        rect_edge(&c, X, Y, W, H, MSP_TEAL); rect_edge(&c, X + 1, Y + 1, W - 2, H - 2, 0x1c2f36);
-        draw_text(&c, X + (W - text_w("HOW TO EARN", 3)) / 2, Y + 14, 3, 0xffffff, "HOW TO EARN");
+        rect_fill(&c, X, Y, W, H, UI_PANEL);
+        rect_edge(&c, X, Y, W, H, MSP_TEAL); rect_edge(&c, X + 1, Y + 1, W - 2, H - 2, UI_INNER);
+        draw_text(&c, X + (W - text_w("HOW TO EARN", 3)) / 2, Y + 14, 3, UI_WHITE, "HOW TO EARN");
         const char *const *lines = progression_sd_earn_lines();
         for (int i = 0; lines[i]; i++) draw_text(&c, X + 14, Y + 50 + i * 24, 2, MSP_TEAL, lines[i]);
-        draw_text(&c, X + (W - text_w("TAP TO CLOSE", 2)) / 2, Y + H - 24, 2, 0x3f6a72, "TAP TO CLOSE");
+        draw_text(&c, X + (W - text_w("TAP TO CLOSE", 2)) / 2, Y + H - 24, 2, UI_CAPTION, "TAP TO CLOSE");
         return;
     }
     const sd_item_t *it = &SD_ITEMS[g_shp_modal];
     const int Y = SHP_MODAL_Y, H = SHP_MODAL_H;
     bool owned = (t->sd_unlocks & it->bit) != 0, can = t->sd_balance >= it->price;
-    rect_fill(&c, X, Y, W, H, 0x04141a);
-    rect_edge(&c, X, Y, W, H, MSP_TEAL); rect_edge(&c, X + 1, Y + 1, W - 2, H - 2, 0x1c2f36);
+    rect_fill(&c, X, Y, W, H, UI_PANEL);
+    rect_edge(&c, X, Y, W, H, MSP_TEAL); rect_edge(&c, X + 1, Y + 1, W - 2, H - 2, UI_INNER);
     blit_icon_scaled(&c, X + (W - 64) / 2, Y + 14, shop_icon(g_shp_modal), 2, true);
-    draw_text(&c, X + (W - text_w(it->name, 3)) / 2, Y + 88, 3, 0xffffff, it->name);
+    draw_text(&c, X + (W - text_w(it->name, 3)) / 2, Y + 88, 3, UI_WHITE, it->name);
     draw_text(&c, X + (W - text_w(it->words, 2)) / 2, Y + 118, 2, MSP_TEAL, it->words);
     draw_text(&c, X + (W - text_w(it->words2, 2)) / 2, Y + 138, 2, MSP_TEAL, it->words2);
     const int bx = X + (W - MSP_HOW_W) / 2, by = Y + H - 12 - MSP_HOW_H;
     if (owned && tank_decor_placeable(g_shp_modal)) {         /* a placeable piece: MOVE re-opens the placement page */
         draw_text(&c, X + (W - text_w("IN THE TANK", 2)) / 2, Y + 164, 2, MSP_TEAL, "IN THE TANK");
-        button(&c, bx, by, MSP_HOW_W, MSP_HOW_H, 0x1c2f36, MSP_TEAL, "MOVE", 2);
+        button(&c, bx, by, MSP_HOW_W, MSP_HOW_H, UI_INNER, MSP_TEAL, "MOVE", 2);
     } else if (owned) draw_text(&c, X + (W - text_w("IN THE TANK", 2)) / 2, by + 8, 2, MSP_TEAL, "IN THE TANK");
     else {
         char line[32]; snprintf(line, sizeof line, "%d", it->price);
         int pw = 20 + text_w(line, 2);
-        price_tag(&c, X + (W - pw) / 2, Y + 164, it->price, can ? 0xffffff : MSP_DIM);
+        price_tag(&c, X + (W - pw) / 2, Y + 164, it->price, can ? UI_WHITE : MSP_DIM);
         if (!can) { snprintf(line, sizeof line, "YOU HAVE %d", (int)t->sd_balance);
                     draw_text(&c, X + (W - text_w(line, 2)) / 2, Y + 184, 2, MSP_DIM, line); }
         if (can) { button(&c, bx, by, MSP_HOW_W, MSP_HOW_H, MSP_TEAL, MSP_TEAL, "UNLOCK", 2);
                    draw_text(&c, bx + (MSP_HOW_W - text_w("UNLOCK", 2)) / 2, by + (MSP_HOW_H - 14) / 2, 2, MSP_INK, "UNLOCK"); }
-        else button(&c, bx, by, MSP_HOW_W, MSP_HOW_H, 0x1c2f36, MSP_DIM, "UNLOCK", 2);
+        else button(&c, bx, by, MSP_HOW_W, MSP_HOW_H, UI_INNER, MSP_DIM, "UNLOCK", 2);
     }
 }
 int render_shop_tap(const tank_t *t, float x, float y) {
@@ -2110,10 +2128,10 @@ void render_sd_toast(const tank_t *t, uint16_t *fb, int stride) {
     char txt[16]; snprintf(txt, sizeof txt, "+%d", g_toast_n);
     const int W = 30 + text_w(txt, 2), H = 22, X = (TANK_W - W) / 2, Y = 8;
     for (int y = Y; y < Y + H; y++)
-        for (int x = X; x < X + W; x++) px_blend(&c, x, y, 0x04141a, 215);
+        for (int x = X; x < X + W; x++) px_blend(&c, x, y, UI_PANEL, 215);
     rect_edge(&c, X, Y, W, H, MSP_TEAL);
     blit_icon(&c, X + 5, Y + 3, &icon_shop_sand_dollar_16, 255);
-    draw_text(&c, X + 25, Y + 4, 2, 0xffffff, txt);
+    draw_text(&c, X + 25, Y + 4, 2, UI_WHITE, txt);
 }
 
 /* ---- settings page (2026-09-15) ----
@@ -2163,7 +2181,7 @@ static void set_row(ctx_t *c, int row_y, const char *label, const char *const na
         if (i == chosen) {                       /* lit: teal, ink lettering */
             button(c, x, y, SET_SEG_W, SET_SEG_H, MSP_TEAL, MSP_TEAL, names[i], 2);
             draw_text(c, x + (SET_SEG_W - text_w(names[i], 2)) / 2, y + (SET_SEG_H - 14) / 2, 2, MSP_INK, names[i]);
-        } else button(c, x, y, SET_SEG_W, SET_SEG_H, 0x1c2f36, MSP_DIM, names[i], 2);
+        } else button(c, x, y, SET_SEG_W, SET_SEG_H, UI_INNER, MSP_DIM, names[i], 2);
     }
 }
 static void set_chevron(ctx_t *c, int cx, int y, bool up, uint32_t rgb) {   /* the setup's, a size down */
@@ -2176,7 +2194,7 @@ static void set_chevron(ctx_t *c, int cx, int y, bool up, uint32_t rgb) {   /* t
 void render_settings(const tank_t *t, uint16_t *fb, int stride, int bright_pct, int volume) {
     ctx_t c = ctx_full(fb, stride, 1.0f);
     rect_fill(&c, 0, 0, TANK_W, TANK_H, MSP_INK);
-    draw_text(&c, (TANK_W - text_w("SETTINGS", 3)) / 2, SET_TITLE_Y, 3, 0xffffff, "SETTINGS");
+    draw_text(&c, (TANK_W - text_w("SETTINGS", 3)) / 2, SET_TITLE_Y, 3, UI_WHITE, "SETTINGS");
     int bi = bright_pct <= 30 ? 0 : bright_pct <= 60 ? 1 : 2;
     set_row(&c, SET_ROW1_Y, "BRIGHTNESS", SET_BRIGHT, 3, bi);
     set_row(&c, SET_ROW2_Y, "VOLUME", SET_VOLUME, 3, volume < 0 ? 0 : volume > 2 ? 2 : volume);
@@ -2187,8 +2205,8 @@ void render_settings(const tank_t *t, uint16_t *fb, int stride, int bright_pct, 
         char num[8]; snprintf(num, sizeof num, "%d", t->light_idle_s);
         int nw = text_w(num, SET_NUM_SCALE), nx = SET_NUM_X + SET_NUM_BOX_W - nw, cx = SET_NUM_X + SET_NUM_BOX_W / 2;
         draw_text(&c, SET_LABEL_X, SET_AFTER_Y, 2, MSP_TEAL, "AFTER");
-        draw_text(&c, nx, SET_NUM_Y, SET_NUM_SCALE, 0xffffff, num);
-        rect_fill(&c, SET_NUM_X, SET_NUM_Y + SET_NUM_H + 6, SET_NUM_BOX_W, 3, 0x3f6a72);
+        draw_text(&c, nx, SET_NUM_Y, SET_NUM_SCALE, UI_WHITE, num);
+        rect_fill(&c, SET_NUM_X, SET_NUM_Y + SET_NUM_H + 6, SET_NUM_BOX_W, 3, UI_CAPTION);
         set_chevron(&c, cx, SET_NUM_Y - SET_NUM_GAP, true, MSP_TEAL);
         set_chevron(&c, cx, SET_NUM_Y + SET_NUM_H + SET_NUM_GAP + 3, false, MSP_TEAL);
         draw_text(&c, SET_NUM_X + SET_NUM_BOX_W + 10, SET_AFTER_Y, 2, MSP_TEAL, "SEC");
@@ -2206,7 +2224,7 @@ void render_settings(const tank_t *t, uint16_t *fb, int stride, int bright_pct, 
        The installer page shows the version it would write in the same words. */
     char ver[40]; snprintf(ver, sizeof ver, "FW %s", version_port_string());
     draw_text_8px(&c, SET_LABEL_X, TANK_H - 8 - 6, MSP_DIM, ver);
-    button(&c, MSP_CLOSE_X, MSP_CLOSE_Y, MSP_CLOSE_W, MSP_CLOSE_H, 0x1c2f36, MSP_TEAL, "CLOSE", 2);
+    button(&c, MSP_CLOSE_X, MSP_CLOSE_Y, MSP_CLOSE_W, MSP_CLOSE_H, UI_INNER, MSP_TEAL, "CLOSE", 2);
 }
 static int set_segment(float x, int n) {
     if (x < SET_SEG_X - 10) return -1;

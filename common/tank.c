@@ -2,6 +2,7 @@
  * updateFish/targetForGoal/wall handling, with prototype px values scaled by
  * ~0.55 for the 448-wide tank. */
 #include "tank.h"
+#include "palette.h"
 #include "tank_events.h"
 #include <math.h>
 #include <stddef.h>
@@ -84,12 +85,12 @@ typedef struct {
 } preset_t;
 static const preset_t ROSTER[] = {
     /* name    color     fin       accent    size  cur  lazy  turn */
-    { "mira", 0x38dcc7, 0x1d9f98, 0xffbd59, 1.08f, 7.5f, 0.2f, 3.2f },
-    { "bolt", 0xff725c, 0xb83a43, 0xffe08a, 0.94f, 6.0f, 0.2f, 4.2f },
-    { "kelp", 0x78d67d, 0x3f8b55, 0xa799ff, 0.86f, 4.0f, 0.1f, 3.2f },
-    { "nori", 0xa799ff, 0x6b5ed6, 0x78d67d, 1.00f, 5.0f, 0.7f, 2.4f },
-    { "pip",  0xffd166, 0xc98a1e, 0x38dcc7, 0.90f, 6.5f, 0.3f, 3.8f },
-    { "sol",  0xf48fb1, 0xb0456f, 0xffe08a, 1.04f, 5.5f, 0.4f, 2.9f },
+    { "mira", FISH_TEAL, FISH_TEAL_FIN, FISH_ACCENT_AMBER, 1.08f, 7.5f, 0.2f, 3.2f },
+    { "bolt", FISH_ORANGE, FISH_ORANGE_FIN, FISH_ACCENT_GOLD, 0.94f, 6.0f, 0.2f, 4.2f },
+    { "kelp", FISH_GREEN, FISH_GREEN_FIN, FISH_ACCENT_VIOLET, 0.86f, 4.0f, 0.1f, 3.2f },
+    { "nori", FISH_VIOLET, FISH_VIOLET_FIN, FISH_GREEN, 1.00f, 5.0f, 0.7f, 2.4f },
+    { "pip",  FISH_YELLOW, FISH_YELLOW_FIN, FISH_TEAL, 0.90f, 6.5f, 0.3f, 3.8f },
+    { "sol",  FISH_PINK, FISH_PINK_FIN, FISH_ACCENT_GOLD, 1.04f, 5.5f, 0.4f, 2.9f },
 };
 #define ROSTER_N ((int)(sizeof ROSTER / sizeof ROSTER[0]))
 int tank_roster_count(void) { return ROSTER_N; }
@@ -97,8 +98,8 @@ const char *tank_roster_name(int preset) { return preset >= 0 && preset < ROSTER
 
 /* the keeper's palettes (setup.c): the six roster bodies + a blue and a
  * silver; the roster's five accents + white, the stress red and a dark ink */
-const uint32_t LOOK_BODY[LOOK_N]   = { 0x38dcc7, 0xff725c, 0x78d67d, 0xa799ff, 0xffd166, 0xf48fb1, 0x4da3ff, 0xe8f1f2 };
-const uint32_t LOOK_ACCENT[LOOK_N] = { 0xffbd59, 0xffe08a, 0xa799ff, 0x78d67d, 0x38dcc7, 0xffffff, 0xf25b65, 0x1a2a30 };
+const uint32_t LOOK_BODY[LOOK_N]   = { FISH_TEAL, FISH_ORANGE, FISH_GREEN, FISH_VIOLET, FISH_YELLOW, FISH_PINK, FISH_BLUE, FISH_SILVER };
+const uint32_t LOOK_ACCENT[LOOK_N] = { FISH_ACCENT_AMBER, FISH_ACCENT_GOLD, FISH_ACCENT_VIOLET, FISH_GREEN, FISH_TEAL, FISH_ACCENT_WHITE, FISH_ACCENT_RED, FISH_ACCENT_INK };
 
 void tank_set_name(tank_t *t, int slot, const char *name) {
     if (slot < 0 || slot >= N_FISH_MAX) return;

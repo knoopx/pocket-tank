@@ -1,5 +1,6 @@
 /* setup.c — first-run setup flow (see setup.h). */
 #include "setup.h"
+#include "palette.h"
 #include "tank_events.h"
 #include "render.h"
 #include "progression.h"
@@ -7,17 +8,18 @@
 #include <math.h>
 #include <stdio.h>
 
-/* the reset prompt's palette: ink panel, teal edge, calm / lit buttons */
-#define C_PANEL  0x04141a
-#define C_EDGE   0x9fd8e2
-#define C_INNER  0x1c2f36
-#define C_DIM    0x2a3f45
-#define C_KEY    0x0e2229
-#define C_TEXT   0xffffff
-#define C_CAPT   0x9fd8e2
-#define C_GO     0x155e58      /* BEGIN: the lit teal (FISH_TEAL) */
-#define C_GO_E   0x38dcc7
-#define C_FILL   0x5f8a92      /* the family page's trait bars: a muted teal the parents' ticks stand out on */
+/* the reset prompt's palette: ink panel, teal edge, calm / lit buttons
+ * (rebuilt on the shared palette, 2026-09-22) */
+#define C_PANEL  UI_PANEL
+#define C_EDGE   UI_EDGE
+#define C_INNER  UI_INNER
+#define C_DIM    UI_DIM
+#define C_KEY    UI_KEY
+#define C_TEXT   UI_WHITE
+#define C_CAPT   UI_EDGE
+#define C_GO     UI_GO         /* BEGIN: the lit teal (FISH_TEAL) */
+#define C_GO_E   FISH_TEAL
+#define C_FILL   UI_FILL       /* the family page's trait bars: a muted teal the parents' ticks stand out on */
 
 static bool s_active;
 static bool s_birth;           /* the birth flow (three pages about s_fish), not the first run */
@@ -410,7 +412,7 @@ static void castle_glyph(uint16_t *fb, int stride, int cx, int y_bot, uint32_t w
  * FRONT: the leaves, the castle over them (its depths mean the plant layer) */
 static void depth_tile(const tank_t *t, uint16_t *fb, int stride, int x, int y, int w, int h, int z, int item, float clock) {
     const int cx = x + w / 2, cy = y + h / 2, lh = h - 6, yb = y + h - 3;
-    const uint32_t la = 0x8dbb48, lb = 0x6c9d38;
+    const uint32_t la = FROND_C, lb = FROND_D;
     const fish_t *who = t->n_fish > 0 ? &t->fish[0] : NULL;
     if (item == 2) {
         if (z == DECOR_Z_BACK) castle_glyph(fb, stride, cx, yb, 0xa99b7b, 0xc4a95e);
