@@ -39,10 +39,13 @@ jobs:
         with:
           fetch-depth: 0          # git describe wants the tags
 
-      - name: Build the firmware (ESP-IDF v5.5, esp32p4)
+      # v6.0: the v5.5 image bundles idf-component-manager 2.2.2, which crashes
+      # (MissingKconfigError) on the LVGL manifest $CONFIG{...} if-clauses at the
+      # first fresh-checkout build; v6.0 ships >=2.3.0 with the catch (MR !518).
+      - name: Build the firmware (ESP-IDF v6.0, esp32p4)
         uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: v5.5
+          esp_idf_version: v6.0
           target: esp32p4
           path: firmware
 
