@@ -1,5 +1,9 @@
 dependencies:
   idf: ">=5.4"
+  # LVGL 9.6.0 adds a deprecation #warning to the legacy src/ headers that
+  # esp_lvgl_adapter 0.6.x includes; ESP-IDF v6.0 builds with -Werror=cpp,
+  # which turns those #warnings into errors. Pin to the last clean 9.x.
+  lvgl/lvgl: "9.5.0"
   espressif/esp_lcd_sh8601: "^2.0"
   espressif/esp_lcd_touch_ft5x06: "^1.1"
   espressif/esp_lcd_touch_cst816s: "^1.0"

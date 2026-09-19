@@ -279,36 +279,11 @@ dependencies:
       type: idf
     version: 5.5.0
   lvgl/lvgl:
-    component_hash: d5e723db3a3feca71e34e333a6598b7624e3822577d374e1d44f0e18374952e1
-    dependencies:
-    - name: espressif/freetype
-      registry_url: https://components.espressif.com
-      require: private
-      rules:
-      - if: idf_version >=5.5 && $CONFIG{LV_USE_FREETYPE} == True
-      version: ^2.14.3
-    - name: espressif/libjpeg-turbo
-      registry_url: https://components.espressif.com
-      require: private
-      rules:
-      - if: idf_version >=5.5 && $CONFIG{LV_USE_LIBJPEG_TURBO} == True
-      version: ^3.1.1
-    - name: espressif/libpng
-      registry_url: https://components.espressif.com
-      require: private
-      rules:
-      - if: idf_version >=5.5 && $CONFIG{LV_USE_LIBPNG} == True
-      version: ^1.6.58
-    - name: espressif/lz4
-      registry_url: https://components.espressif.com
-      require: private
-      rules:
-      - if: idf_version >=5.5 && $CONFIG{LV_USE_LZ4} == True && $CONFIG{LV_USE_LZ4_INTERNAL} == False
-      version: ^1.10.0
+    component_hash: 184e532558c1c45fefed631f3e235423d22582aafb4630f3e8885c35281a49ae
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 9.6.0
+    version: 9.5.0
   waveshare/esp32_p4_wifi6_touch_lcd_4b:
     component_hash: c94a096d73c3579d2b1e92e4caf573026bb8f1701b3c005a289edc032ce86e75
     dependencies:
